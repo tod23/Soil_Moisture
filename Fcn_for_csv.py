@@ -845,6 +845,9 @@ def extract_point_values(lon, lat, valid_assets, verbose=False):
                 with rasterio.open(remote_url) as src:
                     gen = src.sample([(lon, lat)])
                     pixel_value = next(gen)[0]
+                    nodata = src.nodata if src.nodata is not None else src.profile.get('nodata')
+                    if nodata is not None and pixel_value == nodata:
+                        pixel_value = None
                     break
             except Exception:
                 continue
@@ -1070,15 +1073,83 @@ def get_site_soil_properties_as_dataframe(
 ########################################################################################################################
 ########################################################################################################################
 
+import glob
 
+def get_topo_data(BASE_DEST_DIR, master_path, coordonnees):
+    # Recherche des fichiers CSV générés précédemment
+    csv_files = glob.glob(os.path.join(BASE_DEST_DIR, "*", "*.csv"))
 
-def update_local_csv_with_master(csv_file, df_master, cols, verbose=True):
+    soil_properties_cache = {}
+    all_results = []
+    compteur_fichiers = 0
+
+    if csv_files:
+        print(f"{len(csv_files)} fichiers CSV trouvés. Début de l'extraction des propriétés du sol...\n")
+        
+        for csv_file in csv_files:
+            try:
+                df_test = pd.read_csv(csv_file, nrows=1) # On ne lit que la première ligne pour être plus rapide
+                
+                # Extraction des coordonnées
+                if coordonnees == "Grandvillers":
+                    lat=49.4727
+                    lon=2.6203
+                else:
+                    lat = df_test['Latitude'].iloc[0]
+                    lon = df_test['Longitude'].iloc[0]
+                
+                site_id = os.path.basename(csv_file).split('_')[0]
+                
+                # Arrondir pour gérer les imprécisions des flottants
+                coords_key = (round(lon, 4), round(lat, 4))
+                
+                if coords_key in soil_properties_cache:
+                    print(f"[{site_id}] Coordonnées {coords_key} connues -> Récupération depuis le cache.")
+                    df_props = soil_properties_cache[coords_key].copy()
+                    df_props['site_id'] = site_id
+                else:
+                    print(f"[{site_id}] Nouvelles coordonnées {coords_key} -> Téléchargement & calcul...")
+                    df_props = get_site_soil_properties_as_dataframe(
+                        site_id=site_id,
+                        longitude=lon,
+                        latitude=lat,
+                        soil_types=["bulk","silt","clay","sand","Ksat","dem"],
+                        verbose=False # Désactivé pour ne pas polluer l'écran lors du parcours de la boucle
+                    )
+                    soil_properties_cache[coords_key] = df_props
+                
+                all_results.append(df_props)
+                
+                print(f"[{compteur_fichiers+1}/{len(csv_files)}] {site_id}  ")
+                compteur_fichiers += 1
+
+            except Exception as e:
+                print(f"⚠️ Erreur lors du traitement du fichier {csv_file} : {e}")
+
+        # Assemblage de tous les résultats dans un DataFrame final unique et export
+        if all_results:
+            df_all_sites_soil = pd.concat(all_results, ignore_index=True)
+            # Supprimer les potentiels doublons parfaits (si le même site_id apparaît plusieurs fois avec les mêmes params)
+            df_all_sites_soil = df_all_sites_soil.drop_duplicates()
+            
+            # Sauvegarde d'un fichier maître des propriétés du sol
+            master_output = os.path.join(master_path)
+            df_all_sites_soil.to_csv(master_output, index=False)
+            print(f"\nExtraction terminée ! Fichier maître sauvegardé ici : {master_output}")
+    else:
+        print("Aucun fichier CSV n'a été trouvé. Exécutez d'abord la cellule précédente.")
+
+def update_local_csv_with_master(csv_file, df_master, cols, coordonnees = None, verbose=True):
 
     df_test = pd.read_csv(csv_file)
-    
-    # 1. Extraction des coordonnées dans le fichier local courant
-    lat_local = df_test['Latitude'].iloc[0]
-    lon_local = df_test['Longitude'].iloc[0]
+
+    if coordonnees == "Grandvillers":
+        lat_local=49.4727
+        lon_local=2.6203
+    else : 
+            # 1. Extraction des coordonnées dans le fichier local courant
+        lat_local = df_test['Latitude'].iloc[0]
+        lon_local = df_test['Longitude'].iloc[0]
     
     site_id = os.path.basename(csv_file).split('_')[0]
     
@@ -1103,22 +1174,23 @@ def update_local_csv_with_master(csv_file, df_master, cols, verbose=True):
     # ---  Comparaison des données redondantes ---
     
     # Clay fraction (Local: ISMN) vs (Master: OpenLandMap 0-30cm par exemple)
-    clay_local = df_test['Clay_fraction'].iloc[0]
-    clay_cols = [c for c in df_master.columns if 'clay' in c.lower()]
-    clay_master = row_master[clay_cols[0]] if clay_cols else np.nan
-    
-    if verbose:
-        print(f"[Clay_fraction]  Local (ISMN) = {clay_local} | Master (OLM) = {clay_master}")
-    
-    # Elevation (Local: ISMN) vs DEM (Master)
-    elev_local = df_test['Elevation'].iloc[0]
-    dem_master =  row_master.get('dem_m_30m_depth', np.nan)
-    
-    if verbose and pd.notna(elev_local) and pd.notna(dem_master):
-        diff_elev = elev_local - dem_master
-        print(f"[Elevation/DEM]  Local (ISMN) = {elev_local:.2f}m | Master = {dem_master:.2f}m -> Différence: {diff_elev:.2f} m")
-    elif verbose:
-        print(f"[Elevation/DEM]  Local (ISMN) = {elev_local}m | Master = {dem_master}m")
+    if not coordonnees == "Grandvillers":
+        clay_local = df_test['Clay_fraction'].iloc[0]
+        clay_cols = [c for c in df_master.columns if 'clay' in c.lower()]
+        clay_master = row_master[clay_cols[0]] if clay_cols else np.nan
+        
+        if verbose:
+            print(f"[Clay_fraction]  Local (ISMN) = {clay_local} | Master (OLM) = {clay_master}")
+        
+        # Elevation (Local: ISMN) vs DEM (Master)
+        elev_local = df_test['Elevation'].iloc[0]
+        dem_master =  row_master.get('dem_m_30m_depth', np.nan)
+        
+        if verbose and pd.notna(elev_local) and pd.notna(dem_master):
+            diff_elev = elev_local - dem_master
+            print(f"[Elevation/DEM]  Local (ISMN) = {elev_local:.2f}m | Master = {dem_master:.2f}m -> Différence: {diff_elev:.2f} m")
+        elif verbose:
+            print(f"[Elevation/DEM]  Local (ISMN) = {elev_local}m | Master = {dem_master}m")
 
     #########################################################################
     
