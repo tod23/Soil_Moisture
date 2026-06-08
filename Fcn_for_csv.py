@@ -60,15 +60,26 @@ def resample_timeseries(df_temp, freq='D', method='mean', start_date=None, end_d
 def filter_data(ismn_data, var = 'soil_moisture', Climate = ['Cfb'], land_cover = [10], frequency = 'H', depth_from = 0., depth_to = 0.05):
     filtered_sensors = []
 
-    for network, station, sensor in ismn_data.collection \
-        .iter_sensors(variable=var,
-                    depth=Depth(depth_from,depth_to),
-                    filter_meta_dict={'lc_2010': land_cover,
-                                        'climate_KG':Climate}):
-        freq = detect_time_frequency(sensor.read_data())
-        if freq != frequency:
-            continue
-        filtered_sensors.append(sensor)
+    if depth_from is not None and depth_to is not None :
+        for _, _, sensor in ismn_data.collection \
+            .iter_sensors(variable=var,
+                        depth=Depth(depth_from,depth_to),
+                        filter_meta_dict={'lc_2010': land_cover,
+                                            'climate_KG':Climate}):
+            freq = detect_time_frequency(sensor.read_data())
+            if freq != frequency:
+                continue
+            filtered_sensors.append(sensor)
+    else :
+        for _, _, sensor in ismn_data.collection \
+            .iter_sensors(variable=var,
+                        # depth=Depth(depth_from,depth_to),
+                        filter_meta_dict={'lc_2010': land_cover,
+                                            'climate_KG':Climate}):
+            freq = detect_time_frequency(sensor.read_data())
+            if freq != frequency:
+                continue
+            filtered_sensors.append(sensor)
     return filtered_sensors
 
 def interpolate_timeseries(df, col='soil_moisture', n=1, method='linear'):
@@ -318,8 +329,6 @@ def get_meteo_data(lat, lon, start_date, end_date):
     S'être authentifié au moins une fois (dans un terminal : earthengine authenticate)
     """
     import ee
-    import pandas as pd
-    import numpy as np
     
     try:
         # Initialisation de l'API GEE
@@ -337,17 +346,17 @@ def get_meteo_data(lat, lon, start_date, end_date):
     
     # Collection ERA5-Land Daily Aggregated
     collection = ee.ImageCollection('ECMWF/ERA5_LAND/DAILY_AGGR') \
-                   .filterBounds(point) \
-                   .filterDate(start_str, end_str) \
-                   .select([
-                       'temperature_2m_max', 
-                       'temperature_2m_min', 
-                       'total_precipitation_sum',
-                       'surface_solar_radiation_downwards_sum',
-                       'u_component_of_wind_10m_max',
-                       'v_component_of_wind_10m_max',
-                       'dewpoint_temperature_2m_min'
-                   ])
+                .filterBounds(point) \
+                .filterDate(start_str, end_str) \
+                .select([
+                    'temperature_2m_max', 
+                    'temperature_2m_min', 
+                    'total_precipitation_sum',
+                    'surface_solar_radiation_downwards_sum',
+                    'u_component_of_wind_10m_max',
+                    'v_component_of_wind_10m_max',
+                    'dewpoint_temperature_2m_min'
+                    ])
 
     # Extraire les métadonnées de la collection pour ce point sous forme de FeatureCollection
     # Scale dépend de la résolution : ERA5-Land = 11132m
@@ -413,6 +422,82 @@ def get_meteo_data(lat, lon, start_date, end_date):
     df_meteo = df_meteo[['IRRAD', 'TMIN', 'TMAX', 'WIND', 'RAIN', 'VAP']]
     
     return df_meteo
+
+def get_meteo_data_hourly(lat, lon, start_date, end_date):
+    import ee
+
+    try:
+        ee.Authenticate()
+        ee.Initialize()
+    except Exception as e:
+        print(e)
+        return pd.DataFrame()
+
+    start_str = pd.to_datetime(start_date).strftime('%Y-%m-%d')
+    end_str = pd.to_datetime(end_date).strftime('%Y-%m-%d')
+    point = ee.Geometry.Point([lon, lat])
+
+    collection = ee.ImageCollection('ECMWF/ERA5_LAND/HOURLY') \
+                   .filterBounds(point) \
+                   .filterDate(start_str, end_str) \
+                   .select([
+                       'temperature_2m',
+                       'dewpoint_temperature_2m',
+                       'total_precipitation',
+                       'surface_solar_radiation_downwards',
+                       'u_component_of_wind_10m',
+                       'v_component_of_wind_10m'
+                   ])
+
+    def get_data_for_point(image):
+        reduced = image.reduceRegion(
+            reducer=ee.Reducer.first(),
+            geometry=point,
+            scale=11132
+        )
+        return ee.Feature(None, reduced).set('system:time_start', image.get('system:time_start'))
+
+    features = collection.map(get_data_for_point).getInfo()['features']
+    if not features:
+        return pd.DataFrame()
+
+    data_list = []
+    for f in features:
+        props = f['properties']
+        dt = pd.to_datetime(props['system:time_start'], unit='ms')
+        data_list.append({
+            'DateTime': dt,
+            'T2M': props.get('temperature_2m', np.nan),
+            'TDEW': props.get('dewpoint_temperature_2m', np.nan),
+            'RAIN': props.get('total_precipitation', np.nan),
+            'IRRAD_ERA': props.get('surface_solar_radiation_downwards', np.nan),
+            'U10': props.get('u_component_of_wind_10m', np.nan),
+            'V10': props.get('v_component_of_wind_10m', np.nan),
+        })
+
+    df_meteo = pd.DataFrame(data_list)
+    df_meteo.set_index('DateTime', inplace=True)
+    df_meteo.sort_index(inplace=True)
+
+    # K → °C
+    df_meteo['T2M'] = df_meteo['T2M'] - 273.15
+    df_meteo['TDEW'] = df_meteo['TDEW'] - 273.15
+
+    # RAIN m → mm (cumul horaire)
+    df_meteo['RAIN'] = df_meteo['RAIN'] * 1000
+
+    # IRRAD J/m² → kJ/m² (cumul horaire)
+    df_meteo['IRRAD'] = df_meteo['IRRAD_ERA'] / 1000
+
+    # WIND m/s → km/h
+    df_meteo['WIND'] = np.sqrt(df_meteo['U10']**2 + df_meteo['V10']**2) * 3.6
+
+    # VAP (pression de vapeur)
+    df_meteo['VAP'] = 0.6108 * np.exp((17.27 * df_meteo['TDEW']) / (df_meteo['TDEW'] + 237.3))
+
+    return df_meteo[['T2M', 'WIND', 'RAIN', 'IRRAD', 'VAP']]
+
+
 
 def detect_time_frequency(data):
     """
