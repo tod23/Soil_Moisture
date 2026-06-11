@@ -413,7 +413,8 @@ def get_meteo_data(lat, lon, start_date, end_date):
     # Et WIND en km/h (ERA5 a été calculé en m/s)
     df_meteo['IRRAD'] = df_meteo['IRRAD'] * 1000 
     df_meteo['WIND'] = df_meteo['WIND'] * 3.6
-
+    # - FAO 10m→2m 
+    df_meteo['WIND'] = df_meteo['WIND'] * 0.748
     # Vapor Pressure (VAP) à partir du Dew Point: Formule de Tetens pour VAP actuel
     # VAP en kilopascals (kPa)
     df_meteo['VAP'] = 0.6108 * np.exp((17.27 * df_meteo['TDEW']) / (df_meteo['TDEW'] + 237.3))
@@ -423,79 +424,84 @@ def get_meteo_data(lat, lon, start_date, end_date):
     
     return df_meteo
 
+
+
+
+
+
 def get_meteo_data_hourly(lat, lon, start_date, end_date):
     import ee
 
-    try:
-        ee.Authenticate()
-        ee.Initialize()
-    except Exception as e:
-        print(e)
-        return pd.DataFrame()
-
-    start_str = pd.to_datetime(start_date).strftime('%Y-%m-%d')
-    end_str = pd.to_datetime(end_date).strftime('%Y-%m-%d')
+    start = pd.to_datetime(start_date)
+    end = pd.to_datetime(end_date)
     point = ee.Geometry.Point([lon, lat])
 
-    collection = ee.ImageCollection('ECMWF/ERA5_LAND/HOURLY') \
-                   .filterBounds(point) \
-                   .filterDate(start_str, end_str) \
-                   .select([
-                       'temperature_2m',
-                       'dewpoint_temperature_2m',
-                       'total_precipitation',
-                       'surface_solar_radiation_downwards',
-                       'u_component_of_wind_10m',
-                       'v_component_of_wind_10m'
-                   ])
+    dfs = []
+    current = start
+    while current < end:
+        chunk_end = min(current + pd.DateOffset(months=6), end)
+        cs = current.strftime('%Y-%m-%d')
+        ce = chunk_end.strftime('%Y-%m-%d')
 
-    def get_data_for_point(image):
-        reduced = image.reduceRegion(
-            reducer=ee.Reducer.first(),
-            geometry=point,
-            scale=11132
-        )
-        return ee.Feature(None, reduced).set('system:time_start', image.get('system:time_start'))
+        collection = ee.ImageCollection('ECMWF/ERA5_LAND/HOURLY') \
+                       .filterBounds(point) \
+                       .filterDate(cs, ce) \
+                       .select([
+                           'temperature_2m',
+                           'dewpoint_temperature_2m',
+                           'total_precipitation',
+                           'surface_solar_radiation_downwards',
+                           'u_component_of_wind_10m',
+                           'v_component_of_wind_10m'
+                       ])
 
-    features = collection.map(get_data_for_point).getInfo()['features']
-    if not features:
+        def get_data_for_point(image):
+            reduced = image.reduceRegion(
+                reducer=ee.Reducer.first(),
+                geometry=point,
+                scale=11132
+            )
+            return ee.Feature(None, reduced).set(
+                'system:time_start', image.get('system:time_start')
+            )
+
+        features = collection.map(get_data_for_point).getInfo()['features']
+        if features:
+            for f in features:
+                props = f['properties']
+                dt = pd.to_datetime(props['system:time_start'], unit='ms')
+                dfs.append({
+                    'DateTime': dt,
+                    'T2M': props.get('temperature_2m', np.nan),
+                    'TDEW': props.get('dewpoint_temperature_2m', np.nan),
+                    'RAIN': props.get('total_precipitation', np.nan),
+                    'IRRAD_ERA': props.get('surface_solar_radiation_downwards', np.nan),
+                    'U10': props.get('u_component_of_wind_10m', np.nan),
+                    'V10': props.get('v_component_of_wind_10m', np.nan),
+                })
+
+        current = chunk_end
+
+    if not dfs:
         return pd.DataFrame()
 
-    data_list = []
-    for f in features:
-        props = f['properties']
-        dt = pd.to_datetime(props['system:time_start'], unit='ms')
-        data_list.append({
-            'DateTime': dt,
-            'T2M': props.get('temperature_2m', np.nan),
-            'TDEW': props.get('dewpoint_temperature_2m', np.nan),
-            'RAIN': props.get('total_precipitation', np.nan),
-            'IRRAD_ERA': props.get('surface_solar_radiation_downwards', np.nan),
-            'U10': props.get('u_component_of_wind_10m', np.nan),
-            'V10': props.get('v_component_of_wind_10m', np.nan),
-        })
+    df = pd.DataFrame(dfs).set_index('DateTime').sort_index()
 
-    df_meteo = pd.DataFrame(data_list)
-    df_meteo.set_index('DateTime', inplace=True)
-    df_meteo.sort_index(inplace=True)
+    # K -> °C
+    df['T2M'] -= 273.15
+    df['TDEW'] -= 273.15
+    # m -> mm
+    df['RAIN'] *= 1000
+    # J/m² -> kJ/m²
+    df['IRRAD'] = df['IRRAD_ERA'] / 1000
+    # m/s -> km/h
+    df['WIND'] = np.sqrt(df['U10']**2 + df['V10']**2) * 3.6 * 0.748  # + FAO 10m→2m
 
-    # K → °C
-    df_meteo['T2M'] = df_meteo['T2M'] - 273.15
-    df_meteo['TDEW'] = df_meteo['TDEW'] - 273.15
+    # Pression de vapeur
+    df['VAP'] = 0.6108 * np.exp((17.27 * df['TDEW']) / (df['TDEW'] + 237.3))
 
-    # RAIN m → mm (cumul horaire)
-    df_meteo['RAIN'] = df_meteo['RAIN'] * 1000
+    return df[['T2M', 'WIND', 'RAIN', 'IRRAD', 'VAP']]
 
-    # IRRAD J/m² → kJ/m² (cumul horaire)
-    df_meteo['IRRAD'] = df_meteo['IRRAD_ERA'] / 1000
-
-    # WIND m/s → km/h
-    df_meteo['WIND'] = np.sqrt(df_meteo['U10']**2 + df_meteo['V10']**2) * 3.6
-
-    # VAP (pression de vapeur)
-    df_meteo['VAP'] = 0.6108 * np.exp((17.27 * df_meteo['TDEW']) / (df_meteo['TDEW'] + 237.3))
-
-    return df_meteo[['T2M', 'WIND', 'RAIN', 'IRRAD', 'VAP']]
 
 
 
@@ -1162,16 +1168,27 @@ import glob
 
 def get_topo_data(BASE_DEST_DIR, master_path, coordonnees):
     # Recherche des fichiers CSV générés précédemment
-    csv_files = glob.glob(os.path.join(BASE_DEST_DIR, "*", "*.csv"))
+
+    """Parcourt depth_X/station_Y/ et retourne tous les *soil_moisture*.csv"""
+    file_paths = []
+    for depth_dir in os.listdir(BASE_DEST_DIR):
+        depth_path = os.path.join(BASE_DEST_DIR, depth_dir)
+        if os.path.isdir(depth_path):
+            for station_dir in os.listdir(depth_path):
+                station_path = os.path.join(depth_path, station_dir)
+                if os.path.isdir(station_path):
+                    for fname in os.listdir(station_path):
+                        if fname.endswith('.csv') and 'soil_moisture' in fname:
+                            file_paths.append(os.path.join(station_path, fname))
 
     soil_properties_cache = {}
     all_results = []
     compteur_fichiers = 0
 
-    if csv_files:
-        print(f"{len(csv_files)} fichiers CSV trouvés. Début de l'extraction des propriétés du sol...\n")
+    if file_paths:
+        print(f"{len(file_paths)} fichiers CSV trouvés. Début de l'extraction des propriétés du sol...\n")
         
-        for csv_file in csv_files:
+        for csv_file in file_paths:
             try:
                 df_test = pd.read_csv(csv_file, nrows=1) # On ne lit que la première ligne pour être plus rapide
                 
@@ -1205,7 +1222,7 @@ def get_topo_data(BASE_DEST_DIR, master_path, coordonnees):
                 
                 all_results.append(df_props)
                 
-                print(f"[{compteur_fichiers+1}/{len(csv_files)}] {site_id}  ")
+                print(f"[{compteur_fichiers+1}/{len(file_paths)}] {site_id}  ")
                 compteur_fichiers += 1
 
             except Exception as e:
@@ -1235,8 +1252,6 @@ def update_local_csv_with_master(csv_file, df_master, cols, coordonnees = None, 
             # 1. Extraction des coordonnées dans le fichier local courant
         lat_local = df_test['Latitude'].iloc[0]
         lon_local = df_test['Longitude'].iloc[0]
-    
-    site_id = os.path.basename(csv_file).split('_')[0]
     
     # Recherche de la ligne associée dans df_master
     # (On utilise une tolérance car des arrondis de flottants ont parfois lieu lors des sauvegardes to_csv)
