@@ -4,8 +4,6 @@ Ce dépôt contient des scripts Python et des notebooks Jupyter dédiés à l'ac
 
 ## Structure du projet
 
-* **Acquisition des données :**
-  * `GetDatasetFromISMN.ipynb` et `Fcn_GetDatasetFromISMN.py` : Notebooks pour télécharger et traiter les données topographiques à partir des données ISMN (International Soil Moisture Network).
 * **Préparation et Cartographie :**
   * `Dataset_map.ipynb` : Visualisation spatiale / cartographie des jeux de données.
   * `csv_for_hrsm.ipynb` et `Fcn_for_csv.py` : Préparation et formatage des CSV pour les modèles haute résolution (HRSM). Découpage des fichiers ISMN, ajout de données météos, ajout de données topographiques, création d'un CSV pour l'entraînement de modèles.
@@ -14,7 +12,7 @@ Ce dépôt contient des scripts Python et des notebooks Jupyter dédiés à l'ac
 * **Analyse des Résultats :**
   * `Results.ipynb` : Interface interactive utilisant `ipywidgets` (avec intégration Google Drive) pour analyser, filtrer et tracer les résultats finaux.
 * **Autres :**
-  * `HRSM_Grandvillers.ipynb` : Application spécifique des modèles pour la localisation de Grandvillers.
+  * `HRSM_Grandvillers.ipynb` : Adaptation d'un article pour récupérer et appliquer des modèles (inutilisé actuellement)
   * `tri_courbes.py` : Script de tri et traitement de courbes.
 
 ---
