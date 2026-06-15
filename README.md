@@ -240,7 +240,7 @@ outputs/station_depth_csv/
 
 ### 3.9 Sauvegarde des résultats
 
-15. **`save_to_results_csv(results_dict, csv_path)`** : Sauvegarde chaque configuration et ses métriques dans un fichier CSV centralisé `results.csv` avec les colonnes : `timestamp`, `features`, `type`, `depth`, `lookback`, `horizon`, `nb_windows`, `model`, `metric_name`, `value`, `value_std`, `n_trials`.
+15. **`save_to_results_csv(results_dict, csv_path)`** : Sauvegarde chaque configuration et ses métriques dans un fichier CSV centralisé `results.csv` avec les colonnes : `timestamp`, `features`, `experience_name`, `type`, `depth`, `lookback`, `horizon`, `nb_windows`, `model`, `metric_name`, `value`, `value_std`, `n_trials`.
 
 16. **`feature_name_path(results_csv_path, feature_cols)`** : Gère les IDs de configuration de features pour éviter les collisions dans l'arborescence de sortie.
 
