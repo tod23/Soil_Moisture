@@ -9,53 +9,6 @@ def read_and_clean_data(sensor):
     df.loc[df['soil_moisture_flag'] != 'G', 'soil_moisture'] = np.nan
     return df
 
-def resample_timeseries(df_temp, freq='D', method='mean', start_date=None, end_date=None, specific_hour=None):
-    """
-    Rééchantillonne une série temporelle.
-
-    Paramètres:
-    -----------
-    df : pandas.DataFrame
-        DataFrame contenant une colonne 'DateTime' ou ayant un DatetimeIndex.
-    freq : str, defaut 'D'
-        Fréquence ('D' pour Daily, 'H' pour Hourly, 'W' pour Weekly, etc.).
-    method : str, defaut 'mean'
-        Méthode d'agrégation ('mean', 'sum', 'max', 'min', 'first', 'last').
-    """
-    
-    # 2. Filtrer la période
-    if start_date is not None:
-        df_temp = df_temp.loc[start_date:]
-    if end_date is not None:
-        df_temp = df_temp.loc[:end_date]
-        
-    # 3. Rééchantillonnage et application de la méthode
-    if freq == 'D' and specific_hour is not None:
-        # Prendre uniquement l'heure spécifique de chaque jour
-        df_temp = df_temp[df_temp.index.hour == specific_hour]
-        # Rééchantillonner pour garantir qu'on a bien un pas de temps par jour 
-        # (les jours manquants seront remplis par NaN)
-        df_resampled = df_temp.resample('D').first()
-    else:
-        # Appliquer une méthode classique (moyenne, max, etc.) sur la fréquence choisie
-        resampler = df_temp.resample(freq)
-        
-        if method == 'mean':
-            df_resampled = resampler.mean(numeric_only=True)
-        elif method == 'sum':
-            df_resampled = resampler.sum(numeric_only=True)
-        elif method == 'max':
-            df_resampled = resampler.max(numeric_only=True)
-        elif method == 'min':
-            df_resampled = resampler.min(numeric_only=True)
-        elif method == 'first':
-            df_resampled = resampler.first()
-        elif method == 'last':
-            df_resampled = resampler.last()
-        else:
-            raise ValueError(f"Méthode '{method}' non reconnue.")
-    return df_resampled
-
 
 def filter_data(ismn_data, var = 'soil_moisture', Climate = ['Cfb'], land_cover = [10], frequency = 'H', depth_from = 0., depth_to = 0.05):
     filtered_sensors = []
@@ -82,50 +35,8 @@ def filter_data(ismn_data, var = 'soil_moisture', Climate = ['Cfb'], land_cover 
             filtered_sensors.append(sensor)
     return filtered_sensors
 
-def interpolate_timeseries(df, col='soil_moisture', n=1, method='linear'):
-    """
-    Interpole les valeurs manquantes d'une série temporelle pour les valeurs isolées.
-    Seules les valeurs manquantes entourées de données valides seront interpolées.
-
-    Paramètres:
-    -----------
-    df : pandas.DataFrame
-        DataFrame contenant une colonne 'Value' avec des valeurs manquantes.
-    col : str, defaut 'soil_moisture'
-        Nom de la colonne à interpoler.
-    method : str, defaut 'linear'
-        Méthode d'interpolation ('linear', 'polynomial', 'spline', etc.).
-    n : longueur maximale des séquences de NaN à interpoler (par défaut 1, pour n'interpoler que les valeurs isolées).
-    Retour:
-    --------
-    pandas.DataFrame
-        DataFrame avec les valeurs manquantes interpolées.
-    """
-
-    df_interpolated = df.copy()
-    df_interpolated[col] = df_interpolated[col].interpolate(method=method, limit=n)
-    return df_interpolated
 
 
-def cut_timeseries(df, col='soil_moisture', min_length=0):
-    """
-    Découpe une série temporelle (DataFrame) en séquences (DataFrames) sans NaN pour LSTM.
-    min_length permet d'ignorer les séquences qui sont trop courtes.
-    """
-    sequences = []
-    
-    # Identifier les valeurs valides
-    mask = df[col].notna()
-    
-    # Créer un identifiant de groupe qui s'incrémente à chaque présence de NaN
-    groups = (~mask).cumsum()
-    
-    # Grouper les données valides par l'identifiant et ajouter chaque sous-dataframe
-    for _, group in df[mask].groupby(groups):
-        if not group.empty and len(group) >= min_length:
-            sequences.append(group)
-    
-    return sequences
 
 def create_clusters_dict(sensor_list, method='soil_type', verbose=False):
 
