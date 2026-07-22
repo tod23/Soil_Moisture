@@ -21,7 +21,7 @@ Ce dépôt contient des scripts Python et des notebooks Jupyter dédiés à l'ac
 
 ## 1. Problème et objectif
 
-**Tâche :** Prédire l'humidité du sol future (`sm_30cm`) à partir d'observations passées.
+**Tâche :** Prédire l'humidité du sol future à partir d'observations passées.
 
 **Entrée :** Séries temporelles multivariées quotidiennes (7 variables).
 
@@ -33,23 +33,31 @@ Ce dépôt contient des scripts Python et des notebooks Jupyter dédiés à l'ac
 
 ## 2. Architecture du jeu de données
 
+
 ### 2.1 Organisation des fichiers
 
-```
-dataset_training/
-└── station_depth_csv/
-    └── depth/
-        ├── depth_0.1/
-        │   ├── station_0/
-        │   │   ├── soil_moisture_0.1.csv
-        │   │   └── meteo_daily.csv
-        │   ├── station_1/
-        │   └── ...
-        ├── depth_0.3/
-        └── depth_0.5/
-```
-
-Les chemins sont organisés par **profondeur** (`depth_0.1`, `depth_0.3`, `depth_0.5`), chaque dossier contenant des sous-dossiers par **station**. Chaque station contient un fichier CSV d'humidité du sol et optionnellement un fichier `meteo_daily.csv` pour les variables météorologiques.
+Dataset Description
+This dataset provides hourly soil moisture measurements paired with meteorological data and remote sensing covariates, organized by measurement depth.
+Directory Structure
+station_depth_csv/
+├── Soil_Properties_Master.csv          # Static soil properties for all sensors
+├── depth_{0.1,0.2,...,1.0}/            # One folder per nominal depth (m)
+│   ├── metadata.csv                    # Station info (location, network, instrument)
+│   └── station_{id}/                   # One folder per station
+│       ├── {Sensor}_soil_moisture_{d}_{d}.csv  # Hourly soil moisture + remote sensing
+│       ├── meteo_daily.csv             # Daily meteorological variables
+│       └── meteo_hourly.csv            # Hourly meteorological variables
+Depth Levels
+Depth (m)	0.1	0.2	0.3	0.4	0.5	0.6	0.7	0.8	1.0
+Stations	61	53	32	22	 20	 2	 2	 4	 1
+Files
+- Soil_Properties_Master.csv — Static soil properties per sensor: texture (sand/silt/clay fractions at 0–30, 30–60, 60–100 cm), bulk density, saturated hydraulic conductivity (Ksat), DEM-derived topography (elevation, slope, aspect, TWI).
+- metadata.csv (per depth) — Station ID, coordinates, name, monitoring network, and sensor instrument.
+- Soil moisture CSVs — Hourly time series with columns: date_time, soil_moisture, quality flags (soil_moisture_flag, soil_moisture_orig_flag), static covariates (lat, lon, elevation, depth bounds, soil texture, saturation, organic carbon), and remote sensing features: Sentinel-2 bands (B2–B12, NDVI), Sentinel-1 SAR (VV, VH, angle), and HLS bands (B2–B11, NDVI).
+- meteo_hourly.csv — Hourly: 2m temperature (T2M), wind speed (WIND), precipitation (RAIN), incoming solar radiation (IRRAD), vapor pressure (VAP).
+- meteo_daily.csv — Daily: min/max temperature (TMIN, TMAX), plus WIND, RAIN, IRRAD, VAP.
+Networks
+Stations come from multiple monitoring networks: COSMOS-UK, DWD, FR_Aqui, GROW, PTSMN, SMOSMANIA, SOILSCAPE, TAHMO, TERENO, TWENTE, and XMS-CAT, covering sites across Europe (UK, Germany, France, Spain, Netherlands) and Oceania (New Zealand).
 
 ### 2.2 Variables d'entrée
 
