@@ -112,17 +112,23 @@ def make_supervised(
 
          # Scaling sparse avec stats fittées
         X_sparse = np.zeros((len(df), len(feat_cfg["sparse"])), dtype=np.float32)
+        if lookback > 1:
+            X_mask = np.zeros((len(df), len(feat_cfg["sparse"])), dtype=np.float32)
         for j, col in enumerate(feat_cfg["sparse"]):
             vals = df[col].values.astype(np.float32)
             mask = ~np.isnan(vals)
             if sparse_means is not None and mask.sum() > 0:
                 vals[mask] = (vals[mask] - sparse_means[col]) / sparse_stds[col]
             if lookback > 1:
+                X_mask[:, j] = mask.astype(np.float32)
                 vals[~mask] = 0.0
             X_sparse[:, j] = vals
 
-        # Concat : dense + sparse + mask
-        Xs = np.concatenate([X_dense, X_sparse], axis=1)
+        # Concat : dense + sparse (+ mask si lookback > 1)
+        if lookback > 1:
+            Xs = np.concatenate([X_dense, X_sparse, X_mask], axis=1)
+        else:
+            Xs = np.concatenate([X_dense, X_sparse], axis=1)
 
         y_raw = df[[TARGET_COL]].values.astype(np.float32)
         ys = scaler_y.transform(y_raw).reshape(-1)
@@ -148,7 +154,10 @@ def make_supervised(
         y_windows = ys[y_idx]       # (n_windows, horizon)
         d_windows = dates[starts]
 
-        if model_format.lower() not in ["convlstm", "lstm", "transformer", "gru", "tcn"]:
+
+
+        base_model = model_format.lower().replace("_fine_tuned", "")
+        if base_model not in ["convlstm", "lstm", "transformer", "gru", "tcn"]:
             X_windows = X_windows.reshape(len(X_windows), -1)
 
         X_list.append(X_windows)
@@ -163,7 +172,7 @@ def make_supervised(
     d = np.concatenate(d_list)
 
     if model_format.lower() == "convlstm":
-        X = X.reshape(X.shape[0], lookback, 1, len(feat_cfg["dense"]) + len(feat_cfg["soil"]) + len(feat_cfg["sparse"]), 1)
+        X = X.reshape(X.shape[0], lookback, 1, X.shape[2], 1)
 
     return X, y, d
 

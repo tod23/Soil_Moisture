@@ -5,7 +5,7 @@ from config import DATE_COL, TARGET_COL
 from features import resample_timeseries, interpolate_timeseries, update_soil_property, engineer_features
 from typing import List, Dict, Tuple
 
-def load_csv(feat_cfg: Dict, csv_path: str, df_master = None, depth = None) -> pd.DataFrame:
+def load_csv(feat_cfg: Dict, csv_path: str, df_master = None, depth = None, MONTHS = None) -> pd.DataFrame:
     df = pd.read_csv(csv_path, low_memory=False)
 
     DENSE_FEATURE_COLS = feat_cfg["dense"]
@@ -54,7 +54,9 @@ def load_csv(feat_cfg: Dict, csv_path: str, df_master = None, depth = None) -> p
         return None
     
     df = engineer_features(df, feat_cfg)
-    
+    if MONTHS is not None:
+        df = df[df[DATE_COL].dt.month.isin(MONTHS)].reset_index(drop=True)
+
     # --- Filtrage colonnes ---
     cols_to_keep = [DATE_COL] + feat_cfg["soil"] + feat_cfg["dense"]
     if TARGET_COL not in cols_to_keep:
@@ -143,7 +145,7 @@ def save_to_results_csv(
           f"{results_dict.get('metric_name', '?')} = {results_dict.get('value', '?')}")
     
 def split_spatial_files(file_paths: List[str], df_master: pd.DataFrame, depth: float, 
-                        horizons: List[int], lookbacks: List[int], feat_cfg: Dict) -> Tuple[List[pd.DataFrame], List[pd.DataFrame], List[pd.DataFrame]]:
+                        horizons: List[int], lookbacks: List[int], feat_cfg: Dict, MONTHS: List[int]) -> Tuple[List[pd.DataFrame], List[pd.DataFrame], List[pd.DataFrame]]:
     # Grouper les chemins par station
     station_map = {}
     for path in file_paths:
@@ -166,7 +168,7 @@ def split_spatial_files(file_paths: List[str], df_master: pd.DataFrame, depth: f
             result = []
             for sid in station_ids_subset:
                 for p in station_map[sid]:
-                    df = load_csv(feat_cfg, p, df_master, depth)  
+                    df = load_csv(feat_cfg, p, df_master, depth, MONTHS)  
                     if df is None:
                         continue
                     if len(df) >= max(lookbacks) + max(horizons) + 1:

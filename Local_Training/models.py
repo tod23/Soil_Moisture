@@ -282,7 +282,9 @@ def build_transformer(
 
 def build_models(choose_model: str, lookback: int, horizon: int, feat_cfg: Dict) -> tf.keras.Model:
     
-    n_features = len(feat_cfg["dense"]) + len(feat_cfg["soil"]) + len(feat_cfg["sparse"])
+    n_sparse = len(feat_cfg["sparse"])
+    n_sparse_mask = n_sparse if lookback > 1 else 0
+    n_features = len(feat_cfg["dense"]) + len(feat_cfg["soil"]) + n_sparse + n_sparse_mask
     if choose_model == "convlstm":
         model = build_convlstm(lookback, n_features, horizon=horizon)
     elif choose_model == "lstm":
