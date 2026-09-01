@@ -8,7 +8,11 @@ Ce dépôt contient des scripts Python et des notebooks Jupyter dédiés à l'ac
   * `Dataset_map.ipynb` : Visualisation spatiale / cartographie des jeux de données.
   * `csv_for_hrsm.ipynb` et `Fcn_for_csv.py` : Préparation et formatage des CSV pour les modèles haute résolution (HRSM). Découpage des fichiers ISMN, ajout de données météos, ajout de données topographiques, création d'un CSV pour l'entraînement de modèles.
 * **Modélisation et Entraînement :**
-  * `Soil_Moisture_Training.ipynb` : Notebook dédié à l'entraînement des modèles d'humidité du sol (détaillé ci-dessous).
+  * `Local_Training/` : Code modularisé pour l'entraînement des modèles d'humidité du sol (succède à l'ancien notebook `Soil_Moisture_Training.ipynb`, désormais remplacé). Le dossier contient :
+    * `Soil_Moisture_Training.ipynb` / `Soil_Moisture_Training.py` : Notebook et script d'orchestration.
+    * `config.py` : Paramètres, modèles et configurations de features (modifiables).
+    * `models.py` : Architectures des modèles (DL et non-DL).
+    * `Fcn_Training.py`, `features.py`, `files_processing.py`, `preprocessing.py`, `metrics.py`, `plots.py` : Fonctions du pipeline (détaillées ci-dessous).
 * **Analyse des Résultats :**
   * `Results.ipynb` : Interface interactive utilisant `ipywidgets` (avec intégration Google Drive) pour analyser, filtrer et tracer les résultats finaux.
 * **Autres :**
@@ -61,16 +65,17 @@ Stations come from multiple monitoring networks: COSMOS-UK, DWD, FR_Aqui, GROW, 
 
 ### 2.2 Variables d'entrée
 
-Trois catégories de features sont configurées via `FEATURE_CONFIGS` :
+Les features sont organisées en trois groupes définis dans `config.py` :
 
-| Configuration | Variables |
+| Groupe | Variables |
 |---|---|
-| `soil_only` | `soil_moisture` uniquement |
-| `soil_meteo` | `soil_moisture`, `IRRAD`, `TMIN`, `TMAX`, `VAP`, `WIND`, `RAIN` |
-| `soil_meteo_soil` | Variables météo + propriétés du sol (clay, silt, bulk, sand, dem, Saturation, ksat, dem_slope, dem_aspect, dem_twi) |
-| `meteo` | Variables météo uniquement (sans soil_moisture en entrée) |
+| **Denses** (`FULL_DENSE`) | Météo + temporelles : `ET0`, `IRRAD`, `TMIN`, `TMAX`, `VAP`, `WIND`, `RAIN`, `VPD`, `T_RANGE`, `RAIN_CUM_3D/7D/14D`, `doy_sin`, `doy_cos` (avec `soil_moisture` en entrée via `FULL_DENSE_h` selon la configuration) |
+| **Sol** (`FULL_SOIL`) | Propriétés statiques : `clay`, `silt`, `bulk`, `sand`, `dem`, `ksat_m_1km`, `dem_slope`, `dem_aspect`, `dem_twi` |
+| **Sparse / télédétection** (`FULL_SPARSE`) | Sentinel-2 : bandes `S2_B2…B12` + indices (`S2_NDVI`, `S2_NDWI`, `S2_SAVI`, `S2_MNDWI`, `S2_NBR`) ; Sentinel-1 : `S1_VV`, `S1_VH`, `S1_angle`, rapports `S1_VV_over_VH`, `S1_VH_over_VV` ; HLS : bandes `HLS_B2…B11` + `HLS_NDVI` |
 
 Les propriétés du sol statiques sont chargées depuis `Soil_Properties_Master.csv` et fusionnées par correspondance de coordonnées GPS (latitude/longitude) avec une tolérance de `1e-4`. Les colonnes sont renommées dynamiquement selon la profondeur (`0-30cm`, `30-60cm`, `60-100cm`).
+
+La combinaison retenue pour chaque expérience est définie par `FEATURE_CONFIGS` (listes `dense`, `soil`, `sparse`, avec `lookbacks`, `horizons`, `depths`, `nb_windows`, `models` et `networks` associés).
 
 La saisonnalité est encodée via `doy_sin` et `doy_cos` (sinus/cosinus du jour de l'année).
 
@@ -250,26 +255,47 @@ outputs/station_depth_csv/
 
 16. **`feature_name_path(results_csv_path, feature_cols)`** : Gère les IDs de configuration de features pour éviter les collisions dans l'arborescence de sortie.
 
+### 3.10 Fine-tuning Osiris & évaluation Grandvillers/ERA5
+
+Au-delà de l'entraînement standard sur les réseaux ISMN, le pipeline couvre également :
+
+#### Données Osiris
+- `get_osiris_data(osiris_dir)` : Charge les données de l'entreprise Osiris Agriculture à partir d'un dossier contenant un fichier `sites_and_soil.csv` (correspondance sites → coordonnées) et un sous-dossier par site (`meteo_daily.csv`, `sentinel_data.csv`, etc.). Retourne une liste de DataFrames indexés par date.
+
+#### Entraînement & fine-tuning sur Osiris
+- `osiris_train(feat_cfg, drive_dir, all_dfs)` : Entraîne des modèles **from scratch** sur les données Osiris (split spatial par site, une combinaison par profondeur/lookback/horizon/nb_windows/modèle/réseau).
+- `osiris_fine_tuning(feat_cfg, drive_dir, all_dfs)` : **Fine-tuning** d'un modèle pré-entraîné sur les données Osiris (adaptation du modèle à la distribution des champs d'Osiris).
+- `fine_tune_model(...)` : Fonction bas niveau qui poursuit l'entraînement d'un modèle chargé sur les segments d'entraînement/validation fournis.
+- `full_eval_osiris(feat_cfg, drive_dir, all_dfs)` + `run_osiris_evaluation(...)` + `evaluate_on_probes(...)` : Évaluation des modèles sur les parcelles/probes d'Osiris (chargement des modèles sauvegardés et de leurs scalers via `load_saved_model_and_scalers`).
+
+#### Évaluation comparée Grandvillers (données locales vs ERA5)
+- `Get_Grandvillers_data(project_path)` : Charge les données de test du champ de **Grandvillers** (dossier `Grandvillers_satellites`).
+- `prepare_era5_dataset(df_local, display_name, lat, lon)` : Télécharge/associe les données météo **ERA5**, affiche une comparaison avec les données locales, et retourne un DataFrame dont les features météo ont été **remplacées** par celles d'ERA5.
+- `run_comparative_evaluation(model, scaler_x, scaler_y, lst_local, lst_era5, ...)` : Évalue un modèle sur les deux variantes (données locales vs données ERA5).
+- `full_eval_grandvillers(feat_cfg, drive_dir, test_list_local, test_list_era5)` : Boucle d'évaluation complète sur Grandvillers, comparant les prédictions issues des données locales et des données ERA5.
+
+Ces étapes sont orchestrées dans `Soil_Moisture_Training.py` (chargement des données Grandvillers et ERA5, évaluation Osiris en option).
+
 ---
 
 ## 4. Hyperparamètres configurables
 
-| Paramètre | Valeurs | Description |
-|---|---|---|
-| `DEPTHS` | `[0.1, 0.3, 0.5]` | Profondeurs du capteur (m) |
-| `LOOKBACK` | `[7, 14]` | Fenêtre d'observation passée (jours) |
-| `HORIZONS` | `[7]` | Horizon de prédiction (jours) |
-| `NB_WINDOWS` | `[5000, 10000, 15000]` | Nombre de fenêtres d'entraînement |
-| `MODELS` | `["lstm", "transformer", "xgboost", "lightgbm"]` | Modèles à entraîner |
-| `EPOCHS` | `150` | Nombre maximal d'époques |
-| `BATCH_SIZE` | `32` | Taille de batch |
-| `SEED` | `8` | Seed aléatoire pour reproductibilité |
+| Paramètre | Valeurs possibles | Exemples d'utilisation | Description |
+|---|---|---|---|
+| `DEPTHS` | `0.1, 0.2, 0.3, 0.4, 0.5` | `[0.1, 0.2, 0.3, 0.4, 0.5]` (par défaut) | Profondeurs du capteur (m) — un modèle par profondeur |
+| `LOOKBACK` | `1, 2, 4, 7, 14, 21, 28` | `[7]` | Fenêtre d'observation passée (jours) |
+| `HORIZONS` | `1, 3, 7, 14, 21` | `[7]` | Horizon de prédiction (jours) |
+| `NB_WINDOWS` | `1000, 5000, 10000, 20000, 50000, 100000` | `[100000]` | Nombre de fenêtres d'entraînement |
+| `MODELS` | `lstm, gru, tcn, transformer, convlstm, xgboost, lightgbm, random_forest` | `["lstm"]` | Modèles entraînables |
+| `EPOCHS` | — | `150` | Nombre maximal d'époques |
+| `BATCH_SIZE` | — | `32` | Taille de batch |
+| `SEED` | — | `8` | Seed aléatoire pour reproductibilité |
 
 ---
 
 ## 5. Notes techniques
 
-- **Environnement d'exécution** : Conçu pour Google Colab avec montage Google Drive (`/content/gdrive`)
+- **Environnement d'exécution** : exécutable **soit sur Google Colab** (montage Google Drive `/content/gdrive`) **soit en local** — les chemins (données, sorties) sont paramétrables dans `config.py` (`ROOT_DIR`, `drive_dir`).
 - **Dépendances** : tensorflow, xgboost, lightgbm, scikit-learn, optuna, pandas, numpy, matplotlib, joblib
 - **Gestion des NaN** : Plusieurs niveaux de filtrage — interpolation limitée, découpage aux points de rupture NaN, vérification stricte dans `make_supervised()`
 - **Arrêt précoce** : `ReduceLROnPlateau` réduit le learning rate d'un facteur 0.5 si la loss de validation stagne (patience=7), et `EarlyStopping` arrête après 20 époques sans amélioration
