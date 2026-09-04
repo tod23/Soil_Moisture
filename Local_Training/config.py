@@ -24,8 +24,11 @@ OSIRIS_DIR_2025 = "/home/theodore/Documents/Get_Datasets/Osiris_data/Osiris_2025
 
 # Dataset Osiris unifié (format commun hour + colonnes harmonisées), produit par
 # la section "ADAPTATION" de csv_for_hrsm.ipynb. C'est le répertoire de référence
-# pour le leave-one-field-out.
-OSIRIS_DIR_UNIFIED = "/home/theodore/Documents/Get_Datasets/Osiris_data/Osiris_unified"
+# pour le leave-one-field-out. Sur Colab, placé à côté de station_depth_csv
+# (dataset_training/Osiris_unified).
+# Local, uncomment :
+# OSIRIS_DIR_UNIFIED = "/home/theodore/Documents/Get_Datasets/Osiris_data/Osiris_unified"
+OSIRIS_DIR_UNIFIED = os.path.join(ROOT_DIR, "Osiris_unified")
 
 Grandvillers_path = os.path.join(ROOT_DIR, "Grandvillers_data")
 
