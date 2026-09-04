@@ -420,75 +420,90 @@ def load_saved_model_and_scalers(model_dir: str) -> Tuple[Any, StandardScaler, S
 # Creation d'une liste de tableaux
 
 # %%
-def get_osiris_data(osiris_dir: str) -> List[pd.DataFrame]:
+def get_osiris_data(osiris_dirs: list) -> List[pd.DataFrame]:
+    """Charge toutes les sondes Osiris depuis plusieurs répertoires (ex. 2024 et 2025).
 
-    # fichier de correspondance sites -> coordonnées
-    sites_file = os.path.join(osiris_dir, "sites_and_soil.csv")
-    sites = pd.read_csv(sites_file)
+    Chaque répertoire doit contenir un `sites_and_soil.csv`, un sous-dossier par
+    site_id (avec meteo_daily.csv, sentinel_data.csv, meteo_hourly.csv et les
+    fichiers sondes). Le parsing des timestamps gère les formats mixtes (2024/2025).
+    """
 
     all_dfs = []
-    for _, row in sites.iterrows():
 
-        site_id = row["site_id"]
+    if isinstance(osiris_dirs, (str, os.PathLike)):
+        osiris_dirs = [osiris_dirs]
 
-        # Chargement des csv du site
-        dossier_site = os.path.join(osiris_dir, site_id)
+    for osiris_dir in osiris_dirs:
 
-        # meteo_daily.csv
-        meteo_path = os.path.join(dossier_site, "meteo_daily.csv")
-        df_meteo_daily = (pd.read_csv(meteo_path, parse_dates=["timestamp"])
-                        .rename(columns={"timestamp": "date_time"})
-                        .set_index("date_time")
-                        .sort_index()
-                        )
-        
-        # sentinel_data.csv
-        sentinel_path = os.path.join(dossier_site, "sentinel_data.csv")
-        df_satellite = (pd.read_csv(sentinel_path, parse_dates=["timestamp"])
-                        .rename(columns={"timestamp": "date_time"})
-                        .set_index("date_time")
-                        .sort_index()
-                        )
+        # fichier de correspondance sites -> coordonnées
+        sites_file = os.path.join(osiris_dir, "sites_and_soil.csv")
+        sites = pd.read_csv(sites_file)
 
-        # Sondes du site (tous les fichiers csv sauf meteo_daily et sentinel_data)
-        sonde_files = sorted(
-            f for f in os.listdir(dossier_site)
-            if f.endswith(".csv")
-            and f not in ["meteo_hourly.csv", "meteo_daily.csv", "sentinel_data.csv"])
+        for _, row in sites.iterrows():
 
-        for sonde_file in sonde_files:
-            # colonne date_time
-            sonde_path = os.path.join(dossier_site, sonde_file)
-            df_sonde = (pd.read_csv(sonde_path, parse_dates=["timestamp"])
-                                .rename(columns={"timestamp": "date_time"})
-                                )
+            site_id = row["site_id"]
 
-            if "date_time" not in df_sonde.columns:
-                print(f"Colonne 'date_time' manquante dans {sonde_file}. Ignoré.")
-                continue
+            # Chargement des csv du site
+            dossier_site = os.path.join(osiris_dir, site_id)
 
-            # Resample journalier
-            df_sonde = df_sonde.set_index("date_time").sort_index()
-            df_sonde = resample_timeseries(df_sonde, freq="D", method="mean")
+            # meteo_daily.csv
+            meteo_path = os.path.join(dossier_site, "meteo_daily.csv")
+            df_meteo_daily = (pd.read_csv(meteo_path, parse_dates=["timestamp"])
+                            .rename(columns={"timestamp": "date_time"})
+                            .set_index("date_time")
+                            .sort_index()
+                            )
+            
+            # sentinel_data.csv
+            sentinel_path = os.path.join(dossier_site, "sentinel_data.csv")
+            df_satellite = (pd.read_csv(sentinel_path, parse_dates=["timestamp"])
+                            .rename(columns={"timestamp": "date_time"})
+                            .set_index("date_time")
+                            .sort_index()
+                            )
 
-            # Variables statiques
-            for key, value in row.items():
-                if key not in ["latitude", "longitude", "site_id"]:
-                    df_sonde[key] = value
-                    
-            # Jointure météo et satellite
-            df_meteo_daily.index = df_meteo_daily.index.tz_localize(None)  # Force en tz-naive
-            df_satellite.index = df_satellite.index.tz_localize(None)        # Force en tz-naive
-            df_sonde.index = df_sonde.index.tz_localize(None)  # Si déjà tz-aware
+            # Sondes du site (tous les fichiers csv sauf meteo_daily et sentinel_data)
+            sonde_files = sorted(
+                f for f in os.listdir(dossier_site)
+                if f.endswith(".csv")
+                and f not in ["meteo_hourly.csv", "meteo_daily.csv", "sentinel_data.csv"])
 
-            df_sonde = df_sonde.join(df_meteo_daily, how="left")
-            df_sonde = df_sonde.join(df_satellite, how="left")
+            for sonde_file in sonde_files:
+                # colonne temporelle des sondes :
+                #   - dataset unifié : "hour" (horaire)
+                #   - dossiers d'origine : "timestamp"
+                sonde_path = os.path.join(dossier_site, sonde_file)
+                df_sonde = pd.read_csv(sonde_path)
+                time_col = "hour" if "hour" in df_sonde.columns else (
+                    "timestamp" if "timestamp" in df_sonde.columns else None)
+                if time_col is None:
+                    print(f"Colonne temporelle ('hour'/'timestamp') manquante dans {sonde_file}. Ignoré.")
+                    continue
+                df_sonde[time_col] = pd.to_datetime(df_sonde[time_col], format="mixed", utc=True)
+                df_sonde = df_sonde.rename(columns={time_col: "date_time"})
 
-            # retour colonne date_time
-            df_sonde = df_sonde.reset_index()
-            df_sonde["no_serie"] = os.path.splitext(sonde_file)[0]
-            df_sonde["site_id"] = site_id
-            all_dfs.append(df_sonde)
+                # Resample journalier
+                df_sonde = df_sonde.set_index("date_time").sort_index()
+                df_sonde = resample_timeseries(df_sonde, freq="D", method="mean")
+
+                # Variables statiques
+                for key, value in row.items():
+                    if key not in ["latitude", "longitude", "site_id"]:
+                        df_sonde[key] = value
+                        
+                # Jointure météo et satellite
+                df_meteo_daily.index = df_meteo_daily.index.tz_localize(None)  # Force en tz-naive
+                df_satellite.index = df_satellite.index.tz_localize(None)        # Force en tz-naive
+                df_sonde.index = df_sonde.index.tz_localize(None)  # Si déjà tz-aware
+
+                df_sonde = df_sonde.join(df_meteo_daily, how="left")
+                df_sonde = df_sonde.join(df_satellite, how="left")
+
+                # retour colonne date_time
+                df_sonde = df_sonde.reset_index()
+                df_sonde["no_serie"] = os.path.splitext(sonde_file)[0]
+                df_sonde["site_id"] = site_id
+                all_dfs.append(df_sonde)
     return all_dfs
 
 # %%
@@ -573,6 +588,42 @@ def prepare_osiris_data_for_depth(all_dfs, d, feat_cfg):
                     break
     val_list = val_clean
 
+    return train_list, val_list, test_list
+
+
+def prepare_osiris_leave_one_out(all_dfs, test_site_id, val_site_id, d, feat_cfg):
+    """Split leave-one-field-out au niveau site/champ.
+
+    - test : sondes du champ `test_site_id`
+    - val  : sondes du champ `val_site_id`
+    - train: toutes les autres sondes
+
+    Aucune fuite : chaque champ n'apparaît que dans une seule partie.
+    Retourne (train_list, val_list, test_list)."""
+    train_list, val_list, test_list = [], [], []
+
+    for df in all_dfs:
+        df = df.copy()
+        col_name = f'humidity_{int(d * 100)}cm'
+        if col_name in df.columns:
+            df[col_name] = df[col_name] / 100
+            df.rename(columns={col_name: 'soil_moisture'}, inplace=True)
+        df = update_soil_name(df, d)
+        df = engineer_features(df, feat_cfg)
+        if not all(c in df.columns for c in feat_cfg['sparse']):
+            print(f"Skipping {df['site_id'].iloc[0]}_{df['no_serie'].iloc[0]}: missing sparse features.")
+            continue
+
+        sid = df['site_id'].iloc[0]
+        if sid == test_site_id:
+            test_list.append(df)
+        elif sid == val_site_id:
+            val_list.append(df)
+        else:
+            train_list.append(df)
+
+    print(f"Leave-one-out: test={test_site_id} ({len(test_list)} files), "
+          f"val={val_site_id} ({len(val_list)} files), train={len(train_list)} files")
     return train_list, val_list, test_list
 
 
@@ -669,7 +720,10 @@ def fine_tune_model(model_ft, scaler_x_ft, scaler_y_ft, train_segments, val_segm
 
 
 def osiris_train(feat_cfg, drive_dir, all_dfs):
-    """Entraîne des modèles from scratch sur les données OSIRIS (pas de fine-tuning)."""
+    """Entraîne des modèles from scratch sur les données OSIRIS, en leave-one-field-out.
+
+    Pour chaque champ utilisé comme test, un des champs restants sert de validation
+    et les autres d'entraînement. Aucune fuite entre les trois parties."""
 
     depths = feat_cfg["depths"]
     lookbacks = feat_cfg["lookbacks"]
@@ -684,48 +738,58 @@ def osiris_train(feat_cfg, drive_dir, all_dfs):
     site_ids = sorted(list(set(site['site_id'].iloc[0] for site in all_dfs)))
     print(f"Unique site_ids: {site_ids}")
 
-    for d in depths:
-        train_list, val_list, test_list = prepare_osiris_data_for_depth(all_dfs, d, feat_cfg)
-        print(f"Spatial split: train={len(train_list)} files, val={len(val_list)} files, test={len(test_list)} files")
+    for test_site in site_ids:
+        remaining_sites = [s for s in site_ids if s != test_site]
+        for val_site in remaining_sites:
+            print(f"\n{'='*70}\nLEAVE-ONE-FIELD-OUT: test={test_site}, val={val_site}, "
+                  f"train={[s for s in site_ids if s not in (test_site, val_site)]}\n{'='*70}")
 
-        for network in networks:
-            for LB in lookbacks:
-                print(f"--- Lookback: {LB} ---")
-                for horizon in horizons:
-                    print(f"--- Horizon: {horizon} ---")
-                    for NB in nb_windows:
-                        print(f"\n=== Training with NB={NB} windows ===")
+            for d in depths:
+                train_list, val_list, test_list = prepare_osiris_leave_one_out(
+                    all_dfs, test_site, val_site, d, feat_cfg)
 
-                        for m in model_name:
-                            print(f"\n      > Modèle: {m}")
+                for network in networks:
+                    for LB in lookbacks:
+                        print(f"--- Lookback: {LB} ---")
+                        for horizon in horizons:
+                            print(f"--- Horizon: {horizon} ---")
+                            for NB in nb_windows:
+                                print(f"\n=== Training with NB={NB} windows ===")
 
-                            if SAVE_NETWORKS_DIR:
-                                output_dir = os.path.join(
-                                    drive_dir, features_name, f"depth_{d}", f"lookback_{LB}",
-                                    f"horizon_{horizon}", f"nbwindows_{NB}",
-                                    f"model_{m}", f"network_{network}")
-                            else:
-                                output_dir = os.path.join(
-                                    drive_dir, features_name, f"depth_{d}", f"lookback_{LB}",
-                                    f"horizon_{horizon}", f"nbwindows_{NB}",
-                                    f"model_{m}")
+                                for m in model_name:
+                                    print(f"\n      > Modèle: {m}")
 
-                            if SAVE_MODELS_DIR:
-                                os.makedirs(output_dir, exist_ok=True)
+                                    if SAVE_NETWORKS_DIR:
+                                        output_dir = os.path.join(
+                                            drive_dir, features_name, f"depth_{d}", f"lookback_{LB}",
+                                            f"horizon_{horizon}", f"nbwindows_{NB}",
+                                            f"model_{m}", f"network_{network}",
+                                            f"test_{test_site}", f"val_{val_site}")
+                                    else:
+                                        output_dir = os.path.join(
+                                            drive_dir, features_name, f"depth_{d}", f"lookback_{LB}",
+                                            f"horizon_{horizon}", f"nbwindows_{NB}",
+                                            f"model_{m}", f"test_{test_site}", f"val_{val_site}")
 
-                            train_eval_predict_one_probe(
-                                drive_dir=output_dir, lookback=LB, horizon=horizon, choose_model=m,
-                                save_test_plots="first_last",
-                                max_windows=NB,
-                                max_test_plots=5,
-                                depth=d,
-                                train_list=train_list, val_list=val_list, test_list=test_list,
-                                network_str=network,
-                                feat_cfg=feat_cfg
-                            )
+                                    if SAVE_MODELS_DIR:
+                                        os.makedirs(output_dir, exist_ok=True)
+
+                                    train_eval_predict_one_probe(
+                                        drive_dir=output_dir, lookback=LB, horizon=horizon, choose_model=m,
+                                        save_test_plots="first_last",
+                                        max_windows=NB,
+                                        max_test_plots=5,
+                                        depth=d,
+                                        train_list=train_list, val_list=val_list, test_list=test_list,
+                                        network_str=network,
+                                        feat_cfg=feat_cfg
+                                    )
 
 
 def osiris_fine_tuning(feat_cfg, drive_dir, all_dfs):
+    """Fine-tuning des modèles pré-entraînés (type ISMN) sur les données OSIRIS,
+    en leave-one-field-out : pour chaque champ testé, un champ sert de val,
+    les autres d'entraînement. Charge le modèle de base depuis `output_dir`."""
 
     depths = feat_cfg["depths"]
     lookbacks = feat_cfg["lookbacks"]
@@ -740,71 +804,78 @@ def osiris_fine_tuning(feat_cfg, drive_dir, all_dfs):
     site_ids = sorted(list(set(site['site_id'].iloc[0] for site in all_dfs)))
     print(f"Unique site_ids: {site_ids}")
 
-    for d in depths:
-        train_list, val_list, test_list = prepare_osiris_data_for_depth(all_dfs, d, feat_cfg)
-        print(f"Spatial split: train={len(train_list)} files, val={len(val_list)} files, test={len(test_list)} files")
+    for test_site in site_ids:
+        remaining_sites = [s for s in site_ids if s != test_site]
+        for val_site in remaining_sites:
+            print(f"\n{'='*70}\nFINE-TUNING LEAVE-ONE-FIELD-OUT: test={test_site}, val={val_site}, "
+                  f"train={[s for s in site_ids if s not in (test_site, val_site)]}\n{'='*70}")
 
-        for network in networks:
-            for LB in lookbacks:
-                print(f"--- Lookback: {LB} ---")
-                for horizon in horizons:
-                    print(f"--- Horizon: {horizon} ---")
-                    for NB in nb_windows:
-                        print(f"\n=== Training with NB={NB} windows ===")
+            for d in depths:
+                train_list, val_list, test_list = prepare_osiris_leave_one_out(
+                    all_dfs, test_site, val_site, d, feat_cfg)
 
-                        for m in model_name:
-                            print(f"\n      > Modèle: {m}")
+                for network in networks:
+                    for LB in lookbacks:
+                        print(f"--- Lookback: {LB} ---")
+                        for horizon in horizons:
+                            print(f"--- Horizon: {horizon} ---")
+                            for NB in nb_windows:
+                                print(f"\n=== Training with NB={NB} windows ===")
 
-                            if SAVE_NETWORKS_DIR:
-                                output_dir = os.path.join(
-                                    drive_dir, features_name, f"depth_{d}", f"lookback_{LB}",
-                                    f"horizon_{horizon}", f"nbwindows_{NB}",
-                                    f"model_{m}", f"network_{network}")
-                            else:
-                                output_dir = os.path.join(
-                                    drive_dir, features_name, f"depth_{d}", f"lookback_{LB}",
-                                    f"horizon_{horizon}", f"nbwindows_{NB}",
-                                    f"model_{m}")
+                                for m in model_name:
+                                    print(f"\n      > Modèle: {m}")
 
-                            if SAVE_NETWORKS_DIR:
-                                output_dir_ft = os.path.join(
-                                    drive_dir, features_name, f"depth_{d}", f"lookback_{LB}",
-                                    f"horizon_{horizon}", f"nbwindows_{NB}",
-                                    f"model_{m}_fine_tuned", f"network_{network}")
-                            else:
-                                output_dir_ft = output_dir + "_fine_tuned"
+                                    if SAVE_NETWORKS_DIR:
+                                        output_dir = os.path.join(
+                                            drive_dir, features_name, f"depth_{d}", f"lookback_{LB}",
+                                            f"horizon_{horizon}", f"nbwindows_{NB}",
+                                            f"model_{m}", f"network_{network}",
+                                            f"test_{test_site}", f"val_{val_site}")
+                                    else:
+                                        output_dir = os.path.join(
+                                            drive_dir, features_name, f"depth_{d}", f"lookback_{LB}",
+                                            f"horizon_{horizon}", f"nbwindows_{NB}",
+                                            f"model_{m}", f"test_{test_site}", f"val_{val_site}")
 
-                            if SAVE_MODELS_DIR:
-                                os.makedirs(output_dir, exist_ok=True)
+                                    if SAVE_NETWORKS_DIR:
+                                        output_dir_ft = os.path.join(
+                                            drive_dir, features_name, f"depth_{d}", f"lookback_{LB}",
+                                            f"horizon_{horizon}", f"nbwindows_{NB}",
+                                            f"model_{m}_fine_tuned", f"network_{network}",
+                                            f"test_{test_site}", f"val_{val_site}")
+                                    else:
+                                        output_dir_ft = output_dir + "_fine_tuned"
 
-                            model_ft, scaler_x_ft, scaler_y_ft = load_saved_model_and_scalers(output_dir)
-                            if model_ft is None:
-                                continue
+                                    if SAVE_MODELS_DIR:
+                                        os.makedirs(output_dir, exist_ok=True)
 
-                            is_dl = m in ["convlstm", "lstm", "transformer", "gru", "tcn"]
+                                    model_ft, scaler_x_ft, scaler_y_ft = load_saved_model_and_scalers(output_dir)
+                                    if model_ft is None:
+                                        continue
 
-                            train_segments = cut_and_filter_dfs(train_list, LB, horizon, 10**6, feat_cfg)
-                            val_segments   = cut_and_filter_dfs(val_list, LB, horizon, 10**6, feat_cfg)
+                                    is_dl = m in ["convlstm", "lstm", "transformer", "gru", "tcn"]
 
-                            if not train_segments:
-                                print(f"  Pas de segments valides pour LB={LB}, H={horizon}. Skip.")
-                                continue
+                                    train_segments = cut_and_filter_dfs(train_list, LB, horizon, 10**6, feat_cfg)
+                                    val_segments   = cut_and_filter_dfs(val_list, LB, horizon, 10**6, feat_cfg)
 
-                            model_ft = fine_tune_model(model_ft, scaler_x_ft, scaler_y_ft,
-                                                       train_segments, val_segments, is_dl, m, LB, horizon, feat_cfg)
+                                    if not train_segments:
+                                        print(f"  Pas de segments valides pour LB={LB}, H={horizon}. Skip.")
+                                        continue
 
-                            if SAVE_MODELS_DIR:
-                                os.makedirs(output_dir_ft, exist_ok=True)
-                                if is_dl:
-                                    model_ft.save(os.path.join(output_dir_ft, "model.keras"))
-                                else:
-                                    joblib.dump(model_ft, os.path.join(output_dir_ft, "model.pkl"))
-                                joblib.dump(scaler_x_ft, os.path.join(output_dir_ft, "scaler_x.pkl"))
-                                joblib.dump(scaler_y_ft, os.path.join(output_dir_ft, "scaler_y.pkl"))
+                                    model_ft = fine_tune_model(model_ft, scaler_x_ft, scaler_y_ft,
+                                                               train_segments, val_segments, is_dl, m, LB, horizon, feat_cfg)
 
-                            evaluate_on_probes(test_list, model_ft, scaler_x_ft, scaler_y_ft,
-                                                LB, horizon, m, feat_cfg, output_dir_ft, d, NB, network)
+                                    if SAVE_MODELS_DIR:
+                                        os.makedirs(output_dir_ft, exist_ok=True)
+                                        if is_dl:
+                                            model_ft.save(os.path.join(output_dir_ft, "model.keras"))
+                                        else:
+                                            joblib.dump(model_ft, os.path.join(output_dir_ft, "model.pkl"))
+                                        joblib.dump(scaler_x_ft, os.path.join(output_dir_ft, "scaler_x.pkl"))
+                                        joblib.dump(scaler_y_ft, os.path.join(output_dir_ft, "scaler_y.pkl"))
 
+                                    evaluate_on_probes(test_list, model_ft, scaler_x_ft, scaler_y_ft,
+                                                        LB, horizon, m, feat_cfg, output_dir_ft, d, NB, network)
 
 
 def full_eval_osiris(feat_cfg, drive_dir, all_dfs):

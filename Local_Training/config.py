@@ -18,6 +18,15 @@ ROOT_DIR = "/home/theo/Dataset" # Si on local machine
 
 OSIRIS_DIR = os.path.join(ROOT_DIR, "Osiris_dataset")
 
+# Répertoires Osiris bruts (2024 et 2025), chargés ensemble pour le leave-one-field-out
+OSIRIS_DIR_2024 = "/home/theodore/Documents/Get_Datasets/Osiris_data/Osiris_2024"
+OSIRIS_DIR_2025 = "/home/theodore/Documents/Get_Datasets/Osiris_data/Osiris_2025"
+
+# Dataset Osiris unifié (format commun hour + colonnes harmonisées), produit par
+# la section "ADAPTATION" de csv_for_hrsm.ipynb. C'est le répertoire de référence
+# pour le leave-one-field-out.
+OSIRIS_DIR_UNIFIED = "/home/theodore/Documents/Get_Datasets/Osiris_data/Osiris_unified"
+
 Grandvillers_path = os.path.join(ROOT_DIR, "Grandvillers_data")
 
 drive_dir = os.path.join("/home/theo/Documents", FOLDER_NAME, "outputs") # Si on local machine

@@ -1223,3 +1223,282 @@ def update_local_csv_with_master(csv_file, df_master, cols, coordonnees = None, 
             df_test[c] = df_test[c].fillna(row_master[c])
     
     return df_test
+
+
+########################################################################################################################
+# --- Fonctions satellites (migrées depuis csv_for_hrsm.ipynb, cell 17-18) ---
+########################################################################################################################
+
+
+def bitwiseExtract(img, fromBit, toBit):
+  import ee
+  maskSize = ee.Number(1).add(toBit).subtract(fromBit)
+  mask = ee.Number(1).leftShift(maskSize).subtract(1)
+  return img.rightShift(fromBit).bitwiseAnd(mask)
+
+# remove low quality data
+def maskHLSL30(image):
+  qcDay = image.select('Fmask')
+  cloud = bitwiseExtract(qcDay, 1, 1).eq(0)
+  cloudshadow = bitwiseExtract(qcDay, 3, 3).eq(0)
+  snowice = bitwiseExtract(qcDay, 4, 4).eq(0)
+  water = bitwiseExtract(qcDay, 5, 5).eq(0)
+  aerosol = bitwiseExtract(qcDay, 6, 7).lte(2)
+  mask = cloud.And(cloudshadow).And(snowice).And(water).And(aerosol)
+
+  return    image.updateMask(mask).copyProperties(image, ['system:time_start'])
+
+def maskSentinel2(img):
+  # Get the pixel QA band.
+  scl = img.select('SCL')
+  mask = scl.neq(8).And(scl.neq(9)).And(scl.neq(10)).And(scl.neq(11))
+  return img.updateMask(mask).copyProperties(img, ['system:time_start'])
+
+
+def preprocess_vv(image):
+    import ee
+    vv_masked = image.updateMask(image.gt(-20).And(image.lt(-5)))
+    vv_filtered = vv_masked.convolve(ee.Kernel.gaussian(3))
+    return vv_filtered
+
+# Define preprocessing for VH
+def preprocess_vh(image):
+    import ee
+    vh_masked = image.updateMask(image.gt(-30).And(image.lt(-10)))
+    vh_filtered = vh_masked.convolve(ee.Kernel.gaussian(3))
+    return vh_filtered
+
+
+def merge_bands(image):
+    vv = image.select('VV')
+    vh = image.select('VH')
+    angle = image.select('angle')
+
+    vv_prep = preprocess_vv(vv)      # Apply mask + smoothing to VV
+    vh_prep = preprocess_vh(vh)      # Apply mask + smoothing to VH
+
+    merged = vv_prep.addBands(vh_prep).addBands(angle.rename('angle'))
+
+    return merged.copyProperties(image, ['system:time_start'])
+
+def to_float(image):
+    all_bands = image.bandNames()
+    return image.select(all_bands).float().copyProperties(image, ['system:time_start'])
+
+def extract_time_series_to_pandas(collection, point, scale=10, start_date=None, end_date=None):
+    if start_date and end_date:
+        start = pd.Timestamp(start_date)
+        end = pd.Timestamp(end_date)
+        chunks = []
+        chunk_start = start
+        while chunk_start < end:
+            chunk_end = min(chunk_start + pd.DateOffset(years=1), end)
+            sub = collection.filterDate(
+                chunk_start.strftime('%Y-%m-%d'),
+                chunk_end.strftime('%Y-%m-%d')
+            )
+            try :
+                info = sub.getRegion(point, scale).getInfo()
+            except Exception as e:
+                print(f"    Chunk {chunk_start.date()} ignoré : {e}")
+                chunk_start = chunk_end
+                continue
+            if len(info) > 1:
+                header = info[0]
+                data = info[1:]
+                df = pd.DataFrame(data, columns=header)
+                if 'time' in df.columns:
+                    df['datetime'] = pd.to_datetime(df['time'], unit='ms')
+                    df.set_index('datetime', inplace=True)
+                    df = df.sort_index()
+                    cols = [c for c in df.columns if c not in ['id', 'longitude', 'latitude', 'time']]
+                    chunks.append(df[cols])
+            chunk_start = chunk_end
+        return pd.concat(chunks).sort_index() if chunks else pd.DataFrame()
+    # Fallback to original single-call behavior
+    info = collection.getRegion(point, scale).getInfo()
+
+    if len(info) > 1:
+        header = info[0]
+        data = info[1:]
+        df = pd.DataFrame(data, columns=header)
+
+        # Le timestamp GEE est en millisecondes, on le convertit en datetime Pandas
+        if 'time' in df.columns:
+            df['datetime'] = pd.to_datetime(df['time'], unit='ms')
+            df.set_index('datetime', inplace=True)
+            df = df.sort_index()
+            # On retire les colonnes inutiles pour l'affichage
+            colonnes_a_garder = [c for c in df.columns if c not in ['id', 'longitude', 'latitude', 'time']]
+            return df[colonnes_a_garder]
+    return pd.DataFrame()
+
+
+def get_satellite_data_for_point(lon, lat, start_date, end_date):
+    """
+    Interroge GEE pour 1 point précis et renvoie un DataFrame Pandas regroupé par jour, 
+    avec les bandes S1, S2 et HLSL30.
+    """
+    import ee
+    roi_point = ee.Geometry.Point([lon, lat])
+
+    # 1. Création des requêtes GEE
+    s2 = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+      .filterBounds(roi_point).filterDate(start_date, end_date)
+      .map(maskSentinel2)
+      .select(['B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B8A', 'B11', 'B12']))
+
+    s1 = (ee.ImageCollection('COPERNICUS/S1_GRD')
+          .filterBounds(roi_point).filterDate(start_date, end_date)
+          .filter(ee.Filter.eq('instrumentMode', 'IW'))
+          .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV'))
+          .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VH'))
+          .map(merge_bands).map(to_float))
+
+    hls = (ee.ImageCollection("NASA/HLS/HLSL30/v002")
+           .filterBounds(roi_point).filterDate(start_date, end_date)
+           .map(maskHLSL30)
+           .select(['B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B9', 'B10', 'B11']))
+
+    # 2. Récupération des DataFrames Pandas
+    df_s2 = extract_time_series_to_pandas(s2, roi_point, scale=10, start_date=start_date, end_date=end_date)
+    df_s1 = extract_time_series_to_pandas(s1, roi_point, scale=10, start_date=start_date, end_date=end_date)
+    df_hls = extract_time_series_to_pandas(hls, roi_point, scale=30, start_date=start_date, end_date=end_date)
+
+    # 3. Traitements S2
+    if not df_s2.empty:
+        df_s2 = df_s2.apply(pd.to_numeric, errors='coerce')
+        df_s2['NDVI'] = (df_s2['B8'] - df_s2['B4']) / (df_s2['B8'] + df_s2['B4'])
+
+        # Ramener le timestamp horaire à l'échelle journalière :
+        df_s2.index = df_s2.index.normalize() 
+        df_s2 = df_s2.groupby(df_s2.index).mean() # Moyenne si 2 passages le même jour
+        df_s2 = df_s2.add_prefix('S2_')
+
+    # 3. Traitements S1
+    if not df_s1.empty:
+        df_s1 = df_s1.apply(pd.to_numeric, errors='coerce')
+        df_s1.index = df_s1.index.normalize()
+        df_s1 = df_s1.groupby(df_s1.index).mean()
+        df_s1 = df_s1.add_prefix('S1_')
+
+    # 3. Traitements HLS
+    if not df_hls.empty:
+        df_hls = df_hls.apply(pd.to_numeric, errors='coerce')
+        df_hls['NDVI'] = (df_hls['B5'] - df_hls['B4']) / (df_hls['B5'] + df_hls['B4'])
+        df_hls.index = df_hls.index.normalize()
+        df_hls = df_hls.groupby(df_hls.index).mean()
+        df_hls = df_hls.add_prefix('HLS_')
+
+    # 4. Assemblage global des 3 satellites
+    df_sat = pd.DataFrame()
+    if not df_s2.empty: df_sat = df_s2
+    if not df_s1.empty: df_sat = df_sat.join(df_s1, how='outer') if not df_sat.empty else df_s1
+    if not df_hls.empty: df_sat = df_sat.join(df_hls, how='outer') if not df_sat.empty else df_hls
+
+    return df_sat
+
+
+def enrich_csv_with_satellites(csv_path, output_dir, coordonnees ):
+    """
+    Lit un CSV d'entraînement existant, ajoute les colonnes satellites,
+    les valeurs manquantes restent à NaN, et sauvegarde le nouveau dataset.
+    """
+    import os
+    print(f"Traitement de {os.path.basename(csv_path)}")
+    df = pd.read_csv(csv_path)
+
+    # Identifier la colonne de temps (souvent la première)
+    time_col = df.columns[0]
+    df[time_col] = pd.to_datetime(df[time_col])
+    df.set_index(time_col, inplace=True)
+
+    # Extraire les coordonnées et la période
+    if coordonnees == "Grandvillers":
+        lat=49.4727
+        lon=2.6203
+    else:
+        lat = df['Latitude'].iloc[0]
+        lon = df['Longitude'].iloc[0]
+    # On ajoute une petite marge temporelle pour encadrer
+    start_date = (df.index.min() - pd.Timedelta(days=5)).strftime('%Y-%m-%d')
+    end_date = (df.index.max() + pd.Timedelta(days=5)).strftime('%Y-%m-%d')
+
+    print(f"  > Requete GEE pour lat:{lat:.3f} lon:{lon:.3f} de {start_date} à {end_date}...")
+    df_sat = get_satellite_data_for_point(lon, lat, start_date, end_date)
+
+    if df_sat.empty:
+        print("   Aucune donnée satellite trouvée pour cette période/coordonnée.")
+        df_final = df
+    else:
+        # Jointure à gauche sur le dataset quotidien existant : les trous resteront des NaN
+        df_final = df.join(df_sat, how='left')
+
+    # 3. Sauvegarde
+    if output_dir == "":
+        out_path = csv_path
+    else :
+        os.makedirs(output_dir, exist_ok=True)
+        out_path = os.path.join(output_dir, os.path.basename(csv_path))
+    df_final.reset_index().to_csv(out_path, index=False)
+    print(f"   Fichier sauvegardé : {out_path}\n")
+    return df_final
+
+
+########################################################################################################################
+# --- Fonctions clusterisation GPS (migrées depuis csv_for_hrsm.ipynb, cell 26) ---
+########################################################################################################################
+
+
+def distance_m(lat1, lon1, lat2, lon2):
+    """
+    Distance haversine en mètres entre deux points (lat, lon).
+    """
+    lat1, lat2 = np.radians([lat1, lat2])
+    lon1, lon2 = np.radians([lon1, lon2])
+
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+
+    a = (
+        np.sin(dlat / 2) ** 2
+        + np.cos(lat1)
+        * np.cos(lat2)
+        * np.sin(dlon / 2) ** 2
+    )
+
+    return 2 * 6371000 * np.arcsin(np.sqrt(a))
+
+
+def find_or_create_site(lat, lon, sites, EPS=200):
+    """
+    Cherche un site existant à moins de EPS mètres.
+    Sinon crée un nouveau site.
+    """
+    for _, site in sites.iterrows():
+
+        d = distance_m(
+            lat,
+            lon,
+            site["latitude"],
+            site["longitude"]
+        )
+
+        if d < EPS:
+            return site["site_id"], sites
+
+    # création nouveau site
+    new_id = f"site_{len(sites)+1:04d}"
+
+    new_site = pd.DataFrame([{
+        "site_id": new_id,
+        "longitude": lon,
+        "latitude": lat
+    }])
+
+    sites = pd.concat(
+        [sites, new_site],
+        ignore_index=True
+    )
+
+    return new_id, sites

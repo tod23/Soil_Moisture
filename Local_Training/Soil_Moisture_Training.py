@@ -8,7 +8,7 @@ from Fcn_Training import (full_training,
                         osiris_fine_tuning,
                         full_eval_grandvillers,
                         full_eval_osiris)
-from config import OSIRIS_DIR, FEATURE_CONFIGS, drive_dir, Grandvillers_path, base_path, MONTHS
+from config import OSIRIS_DIR_UNIFIED, FEATURE_CONFIGS, drive_dir, Grandvillers_path, base_path, MONTHS
 
 # 1. Charger les données de test Grandvillers
 test_list_local = Get_Grandvillers_data(os.path.join(Grandvillers_path, "Grandvillers_satellites"))
@@ -19,7 +19,7 @@ for i, df in enumerate(test_list_local):
     df_substituted = prepare_era5_dataset(df, display_name=f"Fichier {i}")
     test_list_era5.append(df_substituted)
 
-all_dfs = get_osiris_data(OSIRIS_DIR)
+all_dfs = get_osiris_data(OSIRIS_DIR_UNIFIED)
 
 # for feat_cfg in FEATURE_CONFIGS:
 #     feature_cols = feat_cfg["dense"] + feat_cfg["soil"] + feat_cfg["sparse"]
