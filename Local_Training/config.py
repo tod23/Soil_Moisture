@@ -3,38 +3,52 @@ import numpy as np
 import tensorflow as tf
 
 
-# OUTPUT_NAME = "Fine_Tuning_Osiris" 
-# Grandvillers_path = '/content/gdrive/My Drive/Grandvillers/Grandvillers'
-# ROOT_DIR = "/content/gdrive/MyDrive/Soil_Moisture/dataset_training" # Si on Colab
-# OSIRIS_DIR = os.path.join(ROOT_DIR, "Osiris_dataset")
+def _env_or(name: str, default: str) -> str:
+    """Lit une variable d'environnement, sinon renvoie la valeur locale par défaut.
 
-# drive_dir = os.path.join("/content/gdrive/MyDrive/Soil_Moisture/outputs", OUTPUT_NAME) # Si on Colab
-# RESULTS_CSV_PATH = os.path.join(drive_dir, "results.csv") # Si on Colab
+    Permet au notebook Colab de surcharger les chemins (ROOT_DIR, OUTPUT_DIR, ...)
+    avant l'import de config, sans modifier ce fichier."""
+    return os.environ.get(name, default)
 
 
-FOLDER_NAME = "Fine_Tuning" 
+# ---------------------------------------------------------------
+# Chemins — surchargeables via variables d'environnement (Colab).
+# Défauts : chemins locaux.
+# ---------------------------------------------------------------
 
-ROOT_DIR = "/home/theo/Dataset" # Si on local machine
+# Nom du répertoire de sortie. Colab : OUTPUT_NAME doit être défini par le
+# notebook (ex. "Fine_Tuning_Osiris"). Local : "Fine_Tuning".
+FOLDER_NAME = _env_or("OUTPUT_NAME", "Fine_Tuning")
 
-OSIRIS_DIR = os.path.join(ROOT_DIR, "Osiris_dataset")
+ROOT_DIR = _env_or(
+    "ROOT_DIR",
+    "/home/theo/Dataset",  # Si on local machine
+)
 
-# Répertoires Osiris bruts (2024 et 2025), chargés ensemble pour le leave-one-field-out
-OSIRIS_DIR_2024 = "/home/theodore/Documents/Get_Datasets/Osiris_data/Osiris_2024"
-OSIRIS_DIR_2025 = "/home/theodore/Documents/Get_Datasets/Osiris_data/Osiris_2025"
+# osiris_dir utilisé par get_osiris_data (dataset unifié)
+OSIRIS_DIR = _env_or("OSIRIS_DIR", os.path.join(ROOT_DIR, "Osiris_unified"))
 
 # Dataset Osiris unifié (format commun hour + colonnes harmonisées), produit par
 # la section "ADAPTATION" de csv_for_hrsm.ipynb. C'est le répertoire de référence
 # pour le leave-one-field-out. Sur Colab, placé à côté de station_depth_csv
 # (dataset_training/Osiris_unified).
-# Local, uncomment :
-# OSIRIS_DIR_UNIFIED = "/home/theodore/Documents/Get_Datasets/Osiris_data/Osiris_unified"
-OSIRIS_DIR_UNIFIED = os.path.join(ROOT_DIR, "Osiris_unified")
+OSIRIS_DIR_UNIFIED = _env_or(
+    "OSIRIS_DIR_UNIFIED",
+    os.path.join(ROOT_DIR, "Osiris_unified"),
+)
 
 Grandvillers_path = os.path.join(ROOT_DIR, "Grandvillers_data")
 
-drive_dir = os.path.join("/home/theo/Documents", FOLDER_NAME, "outputs") # Si on local machine
+# Répertoires Osiris bruts (2024 et 2025) — local uniquement
+OSIRIS_DIR_2024 = "/home/theodore/Documents/Get_Datasets/Osiris_data/Osiris_2024"
+OSIRIS_DIR_2025 = "/home/theodore/Documents/Get_Datasets/Osiris_data/Osiris_2025"
 
-RESULTS_CSV_PATH = os.path.join(drive_dir, "results.csv") # Si on local machine
+drive_dir = _env_or(
+    "DRIVE_DIR",
+    os.path.join("/home/theo/Documents", FOLDER_NAME, "outputs"),  # Si on local machine
+)
+
+RESULTS_CSV_PATH = os.path.join(drive_dir, "results.csv")
 
 
 

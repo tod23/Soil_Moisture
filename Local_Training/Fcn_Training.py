@@ -838,18 +838,26 @@ def osiris_fine_tuning(feat_cfg, drive_dir, all_dfs):
                                             f"model_{m}", f"test_{test_site}", f"val_{val_site}")
 
                                     if SAVE_NETWORKS_DIR:
+                                        model_base_dir = os.path.join(
+                                            drive_dir, features_name, f"depth_{d}", f"lookback_{LB}",
+                                            f"horizon_{horizon}", f"nbwindows_{NB}",
+                                            f"model_{m}", f"network_{network}")
                                         output_dir_ft = os.path.join(
                                             drive_dir, features_name, f"depth_{d}", f"lookback_{LB}",
                                             f"horizon_{horizon}", f"nbwindows_{NB}",
                                             f"model_{m}_fine_tuned", f"network_{network}",
                                             f"test_{test_site}", f"val_{val_site}")
                                     else:
+                                        model_base_dir = os.path.join(
+                                            drive_dir, features_name, f"depth_{d}", f"lookback_{LB}",
+                                            f"horizon_{horizon}", f"nbwindows_{NB}",
+                                            f"model_{m}")
                                         output_dir_ft = output_dir + "_fine_tuned"
 
                                     if SAVE_MODELS_DIR:
                                         os.makedirs(output_dir, exist_ok=True)
 
-                                    model_ft, scaler_x_ft, scaler_y_ft = load_saved_model_and_scalers(output_dir)
+                                    model_ft, scaler_x_ft, scaler_y_ft = load_saved_model_and_scalers(model_base_dir)
                                     if model_ft is None:
                                         continue
 
