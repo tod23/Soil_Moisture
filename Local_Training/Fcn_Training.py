@@ -517,9 +517,6 @@ def run_osiris_evaluation(model, scaler_x, scaler_y, all_dfs, model_dir, lookbac
 
     filtered_dfs = []
     for df in all_dfs:
-        if not all(c in df.columns for c in feat_cfg['sparse']):
-            print(f"Skipping {df['site_id'].iloc[0]}_{df['no_serie'].iloc[0]}: missing sparse features.")
-            continue
         df = df.copy()
         col_name = f'humidity_{int(depth*100)}cm'
         if col_name in df.columns:
@@ -527,6 +524,9 @@ def run_osiris_evaluation(model, scaler_x, scaler_y, all_dfs, model_dir, lookbac
             df.rename(columns={col_name: 'soil_moisture'}, inplace=True)
         df = update_soil_name(df, depth)
         df = engineer_features(df, feat_cfg)
+        if not all(c in df.columns for c in feat_cfg['sparse']):
+            print(f"Skipping {df['site_id'].iloc[0]}_{df['no_serie'].iloc[0]}: missing sparse features.")
+            continue
         filtered_dfs.append(df)
 
     evaluate_on_probes(filtered_dfs, model, scaler_x, scaler_y, lookback, horizon,
