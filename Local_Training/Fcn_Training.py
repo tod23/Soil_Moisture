@@ -288,98 +288,90 @@ def load_saved_model_and_scalers(model_dir: str) -> Tuple[Any, StandardScaler, S
     scaler_y = joblib.load(scaler_y_path)
     return model, scaler_x, scaler_y
 
-# %%
-# %% [markdown]
-# # TEST OSIRIS
-
-# %% [markdown]
-# Creation d'une liste de tableaux
 
 # %%
-def get_osiris_data(osiris_dirs: list) -> List[pd.DataFrame]:
-    """Charge toutes les sondes Osiris depuis plusieurs répertoires (ex. 2024 et 2025).
+def get_osiris_data(osiris_dir: str) -> List[pd.DataFrame]:
+    """Charge toutes les sondes du dataset Osiris unifié.
 
-    Chaque répertoire doit contenir un `sites_and_soil.csv`, un sous-dossier par
-    site_id (avec meteo_daily.csv, sentinel_data.csv, meteo_hourly.csv et les
-    fichiers sondes). Le parsing des timestamps gère les formats mixtes (2024/2025).
+    Le dossier doit contenir un `sites_and_soil.csv` (correspondance sites →
+    coordonnées) et un sous-dossier par site_id (avec meteo_daily.csv,
+    sentinel_data.csv et les fichiers sondes). Le parsing des timestamps
+    gère les formats mixtes (2024/2025).
     """
 
     all_dfs = []
 
-    if isinstance(osiris_dirs, (str, os.PathLike)):
-        osiris_dirs = [osiris_dirs]
+    # fichier de correspondance sites -> coordonnées
+    sites_file = os.path.join(osiris_dir, "sites_and_soil.csv")
+    sites = pd.read_csv(sites_file)
 
-    for osiris_dir in osiris_dirs:
+    for _, row in sites.iterrows():
 
-        # fichier de correspondance sites -> coordonnées
-        sites_file = os.path.join(osiris_dir, "sites_and_soil.csv")
-        sites = pd.read_csv(sites_file)
+        site_id = row["site_id"]
 
-        for _, row in sites.iterrows():
+        # Chargement des csv du site
+        dossier_site = os.path.join(osiris_dir, site_id)
 
-            site_id = row["site_id"]
+        # meteo_daily.csv
+        meteo_path = os.path.join(dossier_site, "meteo_daily.csv")
+        df_meteo_daily = (pd.read_csv(meteo_path, parse_dates=["timestamp"])
+                        .rename(columns={"timestamp": "date_time"})
+                        .set_index("date_time")
+                        .sort_index()
+                        )
 
-            # Chargement des csv du site
-            dossier_site = os.path.join(osiris_dir, site_id)
+        # sentinel_data.csv
+        sentinel_path = os.path.join(dossier_site, "sentinel_data.csv")
+        df_satellite = (pd.read_csv(sentinel_path, parse_dates=["timestamp"])
+                        .rename(columns={"timestamp": "date_time"})
+                        .set_index("date_time")
+                        .sort_index()
+                        )
 
-            # meteo_daily.csv
-            meteo_path = os.path.join(dossier_site, "meteo_daily.csv")
-            df_meteo_daily = (pd.read_csv(meteo_path, parse_dates=["timestamp"])
-                            .rename(columns={"timestamp": "date_time"})
-                            .set_index("date_time")
-                            .sort_index()
-                            )
-            
-            # sentinel_data.csv
-            sentinel_path = os.path.join(dossier_site, "sentinel_data.csv")
-            df_satellite = (pd.read_csv(sentinel_path, parse_dates=["timestamp"])
-                            .rename(columns={"timestamp": "date_time"})
-                            .set_index("date_time")
-                            .sort_index()
-                            )
+        # Sondes du site (tous les fichiers csv sauf meteo_daily, meteo_hourly,
+        # meteo_locale et sentinel_data)
+        sonde_files = sorted(
+            f for f in os.listdir(dossier_site)
+            if f.endswith(".csv")
+            and f not in ["meteo_hourly.csv", "meteo_daily.csv", "meteo_locale.csv",
+                          "sentinel_data.csv"])
 
-            # Sondes du site (tous les fichiers csv sauf meteo_daily et sentinel_data)
-            sonde_files = sorted(
-                f for f in os.listdir(dossier_site)
-                if f.endswith(".csv")
-                and f not in ["meteo_hourly.csv", "meteo_daily.csv", "sentinel_data.csv"])
+        for sonde_file in sonde_files:
+            # colonne temporelle des sondes :
+            #   - dataset unifié : "hour" (horaire)
+            #   - dossiers d'origine : "timestamp"
+            sonde_path = os.path.join(dossier_site, sonde_file)
+            df_sonde = pd.read_csv(sonde_path)
+            time_col = "hour" if "hour" in df_sonde.columns else (
+                "timestamp" if "timestamp" in df_sonde.columns else None)
+            if time_col is None:
+                print(f"Colonne temporelle ('hour'/'timestamp') manquante dans {sonde_file}. Ignoré.")
+                continue
+            df_sonde[time_col] = pd.to_datetime(df_sonde[time_col], format="mixed", utc=True)
+            df_sonde = df_sonde.rename(columns={time_col: "date_time"})
 
-            for sonde_file in sonde_files:
-                # colonne temporelle des sondes :
-                #   - dataset unifié : "hour" (horaire)
-                #   - dossiers d'origine : "timestamp"
-                sonde_path = os.path.join(dossier_site, sonde_file)
-                df_sonde = pd.read_csv(sonde_path)
-                time_col = "hour" if "hour" in df_sonde.columns else (
-                    "timestamp" if "timestamp" in df_sonde.columns else None)
-                if time_col is None:
-                    print(f"Colonne temporelle ('hour'/'timestamp') manquante dans {sonde_file}. Ignoré.")
-                    continue
-                df_sonde[time_col] = pd.to_datetime(df_sonde[time_col], format="mixed", utc=True)
-                df_sonde = df_sonde.rename(columns={time_col: "date_time"})
+            # Resample journalier
+            df_sonde = df_sonde.set_index("date_time").sort_index()
+            df_sonde = resample_timeseries(df_sonde, freq="D", method="mean")
 
-                # Resample journalier
-                df_sonde = df_sonde.set_index("date_time").sort_index()
-                df_sonde = resample_timeseries(df_sonde, freq="D", method="mean")
+            # Variables statiques
+            for key, value in row.items():
+                if key not in ["latitude", "longitude", "site_id"]:
+                    df_sonde[key] = value
 
-                # Variables statiques
-                for key, value in row.items():
-                    if key not in ["latitude", "longitude", "site_id"]:
-                        df_sonde[key] = value
-                        
-                # Jointure météo et satellite
-                df_meteo_daily.index = df_meteo_daily.index.tz_localize(None)  # Force en tz-naive
-                df_satellite.index = df_satellite.index.tz_localize(None)        # Force en tz-naive
-                df_sonde.index = df_sonde.index.tz_localize(None)  # Si déjà tz-aware
+            # Jointure météo et satellite
+            df_meteo_daily.index = df_meteo_daily.index.tz_localize(None)  # Force en tz-naive
+            df_satellite.index = df_satellite.index.tz_localize(None)        # Force en tz-naive
+            df_sonde.index = df_sonde.index.tz_localize(None)  # Si déjà tz-aware
 
-                df_sonde = df_sonde.join(df_meteo_daily, how="left")
-                df_sonde = df_sonde.join(df_satellite, how="left")
+            df_sonde = df_sonde.join(df_meteo_daily, how="left")
+            df_sonde = df_sonde.join(df_satellite, how="left")
 
-                # retour colonne date_time
-                df_sonde = df_sonde.reset_index()
-                df_sonde["no_serie"] = os.path.splitext(sonde_file)[0]
-                df_sonde["site_id"] = site_id
-                all_dfs.append(df_sonde)
+            # retour colonne date_time
+            df_sonde = df_sonde.reset_index()
+            df_sonde["no_serie"] = os.path.splitext(sonde_file)[0]
+            df_sonde["site_id"] = site_id
+            all_dfs.append(df_sonde)
     return all_dfs
 
 # %%

@@ -34,10 +34,6 @@ ROOT_DIR = _env_or(
 # côté de station_depth_csv (dataset_training/Osiris_unified/...).
 OSIRIS_DIR = _env_or("OSIRIS_DIR", os.path.join(ROOT_DIR, "Osiris_unified"))
 
-# Répertoires Osiris bruts (2024 et 2025) — local uniquement
-OSIRIS_DIR_2024 = "/home/theodore/Documents/Get_Datasets/Osiris_data/Osiris_2024"
-OSIRIS_DIR_2025 = "/home/theodore/Documents/Get_Datasets/Osiris_data/Osiris_2025"
-
 drive_dir = _env_or(
     "DRIVE_DIR",
     os.path.join("/home/theo/Documents", FOLDER_NAME, "outputs"),  # Si on local machine
@@ -114,60 +110,17 @@ def _without(lst, *items):
 
 FEATURE_CONFIGS = [
 
+    {"name": "Osiris_train", "dense": FULL_DENSE, "soil": FULL_SOIL, "sparse": FULL_SPARSE,
+     "lookbacks": [7], "horizons": [7], "depths": DEPTHS, "nb_windows": [50000],
+        "models": ["lstm"],
+        "networks": ALL_NETWORKS},
 
-    # # ── 4.2.1 Comparaison des modèles ──
-    # {"name": "Models", "dense": FULL_DENSE, "soil": FULL_SOIL, "sparse": FULL_SPARSE,
+
+    # {"name": "Fine_Tuning", "dense": FULL_DENSE, "soil": FULL_SOIL, "sparse": FULL_SPARSE,
     #  "lookbacks": [7], "horizons": [7], "depths": DEPTHS, "nb_windows": [50000],
-    #  "models": ["xgboost", "lightgbm", "lstm", "gru", "tcn", "transformer"],
-    #  "networks": ALL_NETWORKS},
+    #     "models": ["lstm"],
+    #     "networks": ALL_NETWORKS},
 
-#     # ── 4.2.2 Effet du lookback ──
-#     {"name": "Lookback", "dense": FULL_DENSE, "soil": FULL_SOIL, "sparse": FULL_SPARSE_S1,
-#      "lookbacks": [1, 2, 4, 7, 14, 21, 28],
-#      "horizons": [7], "depths": DEPTHS, "nb_windows": [50000],
-#      "models": ["xgboost", "lstm"],
-#      "networks": ALL_NETWORKS},
-
-    # ── 4.2.3 Effet de l'horizon ──
-    {"name": "Horizon_lightgbm", "dense": FULL_DENSE, "soil": FULL_SOIL, "sparse": FULL_SPARSE,
-     "lookbacks": [1],
-     "horizons": [1, 3, 7, 14, 21],
-     "depths": DEPTHS, "nb_windows": [50000],
-     "models": ["lightgbm"],
-     "networks": ALL_NETWORKS},
-
-    # ── 4.2.4 Effet du nombre de fenêtres ──
-    {"name": "Nb_Windows_lightgbm", "dense": FULL_DENSE, "soil": FULL_SOIL, "sparse": FULL_SPARSE_S1,
-     "lookbacks": [1], "horizons": [7], "depths": DEPTHS,
-     "nb_windows": [1000, 5000, 10000, 20000, 50000, 100000],
-     "models": ["lightgbm"],
-     "networks": ALL_NETWORKS},
-
-    {"name": "Features_Meteo_Soil", "dense": FULL_DENSE, "soil": FULL_SOIL, "sparse": [],
-     "lookbacks": [1], "horizons": [7], "depths": DEPTHS, "nb_windows": [50000],
-        "models": ["lightgbm"],
-        "networks": ALL_NETWORKS},
-
-    {"name": "Features_Meteo_S1", "dense": FULL_DENSE, "soil": [], "sparse": FULL_SPARSE_S1,
-     "lookbacks": [1], "horizons": [7], "depths": DEPTHS, "nb_windows": [50000],
-        "models": ["lightgbm"],
-        "networks": ALL_NETWORKS},
-
-    {"name": "Features_Soil_S1", "dense": [], "soil": FULL_SOIL, "sparse": FULL_SPARSE_S1,
-     "lookbacks": [1], "horizons": [7], "depths": DEPTHS, "nb_windows": [50000],
-        "models": ["lightgbm"],
-        "networks": ALL_NETWORKS},
-
-    {"name": "Features_Meteo_Soil_S1", "dense": FULL_DENSE, "soil": FULL_SOIL, "sparse": FULL_SPARSE_S1,
-     "lookbacks": [1], "horizons": [7], "depths": DEPTHS, "nb_windows": [50000],
-        "models": ["lightgbm"],
-        "networks": ALL_NETWORKS},
-
-#     # ── 4.2.6 Importance de la proximité géographique (par réseau) ──
-#     {"name": "Networks", "dense": FULL_DENSE, "soil": FULL_SOIL, "sparse": FULL_SPARSE_S1,
-#      "lookbacks": [7], "horizons": [7], "depths": DEPTHS, "nb_windows": [50000],
-#      "models": ["xgboost"],
-#      "networks": SEPARATE_NETWORKS},
 ]
 
 SAVE_PLOTS = True
