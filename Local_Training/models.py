@@ -1,5 +1,5 @@
 import tensorflow as tf
-from tensorflow.keras import layers
+from tensorflow.keras import layers, models
 from tensorflow.keras.saving import register_keras_serializable
 
 from xgboost import XGBRegressor
@@ -7,8 +7,6 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.svm import SVR
 import lightgbm as lgb
 
-from tensorflow.keras import layers, models
-from tensorflow.keras.metrics import MeanSquaredError as MSE
 from tensorflow.keras.regularizers import l2
 from sklearn.multioutput import MultiOutputRegressor
 from config import SEED

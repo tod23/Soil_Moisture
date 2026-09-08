@@ -1152,78 +1152,6 @@ def get_topo_data(BASE_DEST_DIR, master_path, coordonnees):
     else:
         print("Aucun fichier CSV n'a été trouvé. Exécutez d'abord la cellule précédente.")
 
-def update_local_csv_with_master(csv_file, df_master, cols, coordonnees = None, verbose=True):
-
-    df_test = pd.read_csv(csv_file)
-
-    if coordonnees == "Grandvillers":
-        lat_local=49.4727
-        lon_local=2.6203
-    else : 
-            # 1. Extraction des coordonnées dans le fichier local courant
-        lat_local = df_test['Latitude'].iloc[0]
-        lon_local = df_test['Longitude'].iloc[0]
-    
-    # Recherche de la ligne associée dans df_master
-    # (On utilise une tolérance car des arrondis de flottants ont parfois lieu lors des sauvegardes to_csv)
-    tol = 1e-4
-    match = df_master[
-        (np.abs(df_master['latitude'] - lat_local) < tol) & 
-        (np.abs(df_master['longitude'] - lon_local) < tol)
-    ]
-    
-    if match.empty:
-        print(f" Aucune correspondance trouvée dans le Master CSV pour ({lat_local}, {lon_local})")
-        return None
-
-    row_master = match.iloc[0]
-    if verbose:
-        print(f"=== Fichier local : {os.path.basename(csv_file)} ===")
-    
-
-    ########################################################################
-    # ---  Comparaison des données redondantes ---
-    
-    # Clay fraction (Local: ISMN) vs (Master: OpenLandMap 0-30cm par exemple)
-    if not coordonnees == "Grandvillers":
-        clay_local = df_test['Clay_fraction'].iloc[0]
-        clay_cols = [c for c in df_master.columns if 'clay' in c.lower()]
-        clay_master = row_master[clay_cols[0]] if clay_cols else np.nan
-        
-        if verbose:
-            print(f"[Clay_fraction]  Local (ISMN) = {clay_local} | Master (OLM) = {clay_master}")
-        
-        # Elevation (Local: ISMN) vs DEM (Master)
-        elev_local = df_test['Elevation'].iloc[0]
-        dem_master =  row_master.get('dem_m_30m_depth', np.nan)
-        
-        if verbose and pd.notna(elev_local) and pd.notna(dem_master):
-            diff_elev = elev_local - dem_master
-            print(f"[Elevation/DEM]  Local (ISMN) = {elev_local:.2f}m | Master = {dem_master:.2f}m -> Différence: {diff_elev:.2f} m")
-        elif verbose:
-            print(f"[Elevation/DEM]  Local (ISMN) = {elev_local}m | Master = {dem_master}m")
-
-    #########################################################################
-    
-    # --- Étape 2 : Ajout des colonnes manquantes ---
-    # rename des colonnes de df_test pour correspondre à celles du master (ex: 'clay_fraction' -> 'clay_m_30m_0cm_30cm', 'elevation' -> 'dem_m_30m_depth'
-    df_test = df_test.rename(columns={'Clay_fraction': 'clay_m_30m_0cm_30cm', 
-                                      'Silt_fraction': 'silt_m_30m_0cm_30cm', 
-                                      'Sand_fraction': 'sand_m_30m_0cm_30cm', 
-                                      'Elevation': 'dem_m_30m_depth',
-                                      })
-
-
-    for c in cols:
-        if c not in df_test.columns:
-            df_test[c] = row_master[c]
-        elif pd.isna(df_test[c].iloc[0]) and pd.notna(row_master[c]):
-            df_test[c] = row_master[c]
-        else :
-            df_test[c] = df_test[c].fillna(row_master[c])
-    
-    return df_test
-
 
 ########################################################################################################################
 # --- Fonctions satellites (migrées depuis csv_for_hrsm.ipynb, cell 17-18) ---
@@ -1446,59 +1374,671 @@ def enrich_csv_with_satellites(csv_path, output_dir, coordonnees ):
 
 
 ########################################################################################################################
-# --- Fonctions clusterisation GPS (migrées depuis csv_for_hrsm.ipynb, cell 26) ---
+# --- Fonctions séries temporelles (migrées depuis Get_Datasets/Fcn_for_csv.py) ---
 ########################################################################################################################
 
 
-def distance_m(lat1, lon1, lat2, lon2):
+def resample_timeseries(df_temp, freq='D', method='mean', start_date=None, end_date=None, specific_hour=None):
     """
-    Distance haversine en mètres entre deux points (lat, lon).
+    Rééchantillonne une série temporelle.
+
+    Paramètres:
+    -----------
+    df : pandas.DataFrame
+        DataFrame contenant une colonne 'DateTime' ou ayant un DatetimeIndex.
+    freq : str, defaut 'D'
+        Fréquence ('D' pour Daily, 'H' pour Hourly, 'W' pour Weekly, etc.).
+    method : str, defaut 'mean'
+        Méthode d'agrégation ('mean', 'sum', 'max', 'min', 'first', 'last').
     """
-    lat1, lat2 = np.radians([lat1, lat2])
-    lon1, lon2 = np.radians([lon1, lon2])
 
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
+    # 2. Filtrer la période
+    if start_date is not None:
+        df_temp = df_temp.loc[start_date:]
+    if end_date is not None:
+        df_temp = df_temp.loc[:end_date]
 
-    a = (
-        np.sin(dlat / 2) ** 2
-        + np.cos(lat1)
-        * np.cos(lat2)
-        * np.sin(dlon / 2) ** 2
+    # 3. Rééchantillonnage et application de la méthode
+    if freq == 'D' and specific_hour is not None:
+        # Prendre uniquement l'heure spécifique de chaque jour
+        df_temp = df_temp[df_temp.index.hour == specific_hour]
+        # Rééchantillonner pour garantir qu'on a bien un pas de temps par jour
+        # (les jours manquants seront remplis par NaN)
+        df_resampled = df_temp.resample('D').first()
+    else:
+        # Appliquer une méthode classique (moyenne, max, etc.) sur la fréquence choisie
+        resampler = df_temp.resample(freq)
+
+        if method == 'mean':
+            df_resampled = resampler.mean(numeric_only=True)
+        elif method == 'sum':
+            df_resampled = resampler.sum(numeric_only=True)
+        elif method == 'max':
+            df_resampled = resampler.max(numeric_only=True)
+        elif method == 'min':
+            df_resampled = resampler.min(numeric_only=True)
+        elif method == 'first':
+            df_resampled = resampler.first()
+        elif method == 'last':
+            df_resampled = resampler.last()
+        else:
+            raise ValueError(f"Méthode '{method}' non reconnue.")
+    return df_resampled
+
+
+def interpolate_timeseries(df, col='soil_moisture', n=1, method='linear'):
+    """
+    Interpole les valeurs manquantes d'une série temporelle pour les valeurs isolées.
+    Seules les valeurs manquantes entourées de données valides seront interpolées.
+
+    Paramètres:
+    -----------
+    df : pandas.DataFrame
+        DataFrame contenant une colonne 'Value' avec des valeurs manquantes.
+    col : str, defaut 'soil_moisture'
+        Nom de la colonne à interpoler.
+    method : str, defaut 'linear'
+        Méthode d'interpolation ('linear', 'polynomial', 'spline', etc.).
+    n : longueur maximale des séquences de NaN à interpoler (par défaut 1, pour n'interpoler que les valeurs isolées).
+    Retour:
+    --------
+    pandas.DataFrame
+        DataFrame avec les valeurs manquantes interpolées.
+    """
+
+    df_interpolated = df.copy()
+    df_interpolated[col] = df_interpolated[col].interpolate(method=method, limit=n)
+    return df_interpolated
+
+
+def cut_timeseries(df, col='soil_moisture', min_length=0):
+    """
+    Découpe une série temporelle (DataFrame) en séquences (DataFrames) sans NaN pour LSTM.
+    min_length permet d'ignorer les séquences qui sont trop courtes.
+    """
+    sequences = []
+
+    # Identifier les valeurs valides
+    mask = df[col].notna()
+
+    # Créer un identifiant de groupe qui s'incrémente à chaque présence de NaN
+    groups = (~mask).cumsum()
+
+    # Grouper les données valides par l'identifiant et ajouter chaque sous-dataframe
+    for _, group in df[mask].groupby(groups):
+        if not group.empty and len(group) >= min_length:
+            sequences.append(group)
+
+    return sequences
+
+
+########################################################################################################################
+# --- Météo locale Grandvillers (migrée depuis Get_Datasets/Fcn_for_csv.py) ---
+########################################################################################################################
+
+
+def create_meteo_locale(raw_dir, dest_grandvillers, dest_unified):
+    """
+    Extrait la série météo journalière de la station locale (site Grandvillers) et
+    écrit `meteo_locale.csv` dans le même format que le `meteo_daily.csv` ERA5.
+
+    La météo de site est identique pour toutes les sondes (colonnes embarquées dans
+    chaque fichier sonde) : on concatène les fichiers CSV du répertoire `raw_dir`, on
+    ne garde que les colonnes météo courantes et on déduplique par date.
+
+    Colonnes écrites (6 + irrig) : IRRAD, TMIN, TMAX, VAP, WIND, RAIN, irrig_mm.
+
+    Deux sorties au même contenu, colonne temporelle adaptée :
+      - dest_grandvillers : 'date'      (comme Grandvillers_data/meteo_daily.csv)
+      - dest_unified      : 'timestamp' (comme Osiris_unified/*/meteo_daily.csv)
+
+    Retourne le DataFrame météo locale (colonne 'date').
+    """
+    import os
+
+    METEO_COLS = ["IRRAD", "TMIN", "TMAX", "VAP", "WIND", "RAIN"]
+
+    csv_files = sorted(
+        f for f in os.listdir(raw_dir)
+        if f.endswith(".csv")
     )
+    if not csv_files:
+        raise ValueError(f"Aucun fichier sonde dans {raw_dir}")
 
-    return 2 * 6371000 * np.arcsin(np.sqrt(a))
+    chunks = []
+    for fname in csv_files:
+        df = pd.read_csv(os.path.join(raw_dir, fname))
+        keep = ["date"] + [c for c in METEO_COLS if c in df.columns]
+        if "irrig_mm" in df.columns:
+            keep.append("irrig_mm")
+        df = df[keep].copy()
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        chunks.append(df)
+
+    df_meteo = pd.concat(chunks, ignore_index=True)
+    df_meteo = df_meteo.dropna(subset=METEO_COLS)
+    df_meteo = (df_meteo.drop_duplicates(subset=["date"])
+                        .sort_values("date")
+                        .reset_index(drop=True))
+
+    out_order = ["date"] + [c for c in METEO_COLS + ["irrig_mm"] if c in df_meteo.columns]
+    df_meteo = df_meteo[out_order]
+
+    df_meteo.to_csv(dest_grandvillers, index=False)
+    df_meteo.rename(columns={"date": "timestamp"}).to_csv(dest_unified, index=False)
+
+    irrig_days = int((df_meteo["irrig_mm"] > 0).sum()) if "irrig_mm" in df_meteo.columns else 0
+    print(f"meteo_locale écrit :")
+    print(f"  -> {dest_grandvillers}  ({len(df_meteo)} lignes)")
+    print(f"  -> {dest_unified}  ({len(df_meteo)} lignes)")
+    print(f"Période : {df_meteo['date'].min().date()} → {df_meteo['date'].max().date()}")
+    print(f"NaN restants : {int(df_meteo[METEO_COLS].isna().sum().sum())} | jours irrigués (irrig_mm>0) : {irrig_days}")
+
+    return df_meteo
 
 
-def find_or_create_site(lat, lon, sites, EPS=200):
+########################################################################################################################
+# --- Réorganisation des données ISMN & Osiris (migrées depuis csv_for_hrsm.ipynb et Visualisation_Osiris.ipynb) ---
+########################################################################################################################
+
+
+def build_ismn_station_csvs(sensor_list, base_dest_dir):
     """
-    Cherche un site existant à moins de EPS mètres.
-    Sinon crée un nouveau site.
+    Dossiers par sites pour les sondes ISMN : écrit un csv par sonde dans
+    <base_dest_dir>/<folder_depth>/station_<id>/<sensor>.csv et un `metadata.csv`
+    par folder_depth (relie le site aux métadonnées de la station). Tri par profondeur.
+    (migré depuis csv_for_hrsm.ipynb, cell 13)
     """
-    for _, site in sites.iterrows():
+    compteur_fichiers = 0
 
-        d = distance_m(
-            lat,
-            lon,
-            site["latitude"],
-            site["longitude"]
-        )
+    # Structures pour le regroupement par station
+    stations_par_depth = {}      # (folder_depth, lat, lon) → station_id
+    prochains_id = {}            # folder_depth → prochain station_id
+    lignes_meta = {}             # folder_depth → [(station_id, lat, lon)]
 
-        if d < EPS:
-            return site["site_id"], sites
+    cols_meta = ["station_id", "latitude", "longitude",
+                "station_name", "network", "instrument"]
 
-    # création nouveau site
-    new_id = f"site_{len(sites)+1:04d}"
+    for sensor in sensor_list:
 
-    new_site = pd.DataFrame([{
-        "site_id": new_id,
-        "longitude": lon,
-        "latitude": lat
-    }])
+        df_full = read_and_clean_data(sensor)
 
-    sites = pd.concat(
-        [sites, new_site],
-        ignore_index=True
-    )
+        # Récupération sécurisée des métadonnées ISMN
+        meta = sensor.metadata.to_pd()
 
-    return new_id, sites
+        def get_meta(key, default=np.nan):
+            return meta.get(key, default).val if key in meta else default
+
+        lat, lon = get_meta('latitude'), get_meta('longitude')
+        if pd.isna(lat) or pd.isna(lon):
+            print(f"[{sensor}] Latitude/Longitude manquantes. Skip.")
+            continue
+
+        depth_from, depth_to = meta['variable'].depth_from, meta['variable'].depth_to
+
+        df_full['Latitude'] = lat
+        df_full['Longitude'] = lon
+        df_full['Elevation'] = get_meta('elevation')
+        df_full['Depth_from'] = depth_from
+        df_full['Depth_to'] = depth_to
+        df_full['Clay_fraction'] = get_meta('clay_fraction')
+        df_full['Silt_fraction'] = get_meta('silt_fraction')
+        df_full['Sand_fraction'] = get_meta('sand_fraction')
+        df_full['Saturation'] = get_meta('saturation')
+        df_full['Organic_carbon'] = get_meta('organic_carbon')
+
+        depth_thresholds = [0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.95, 1.05]
+        folder_depth = "depth_1.1_plus"
+        for t in depth_thresholds:
+            if depth_to <= t:
+                folder_depth = f"depth_{t - 0.05:.1f}"
+                break
+
+        # ---------- Regroupement par station ---------- #
+        cle = (folder_depth, lat, lon)
+
+        if folder_depth not in prochains_id:
+            prochains_id[folder_depth] = 1
+
+        if cle not in stations_par_depth:
+            station_id = prochains_id[folder_depth]
+            stations_par_depth[cle] = station_id
+            prochains_id[folder_depth] += 1
+            lignes_meta.setdefault(folder_depth, []).append([
+            station_id, lat, lon,
+            get_meta('station'), get_meta('network'), get_meta('instrument')
+            ])
+        else:
+            station_id = stations_par_depth[cle]
+
+        dossier_station = os.path.join(base_dest_dir, folder_depth, f"station_{station_id}")
+        os.makedirs(dossier_station, exist_ok=True)
+        fichier_csv = os.path.join(dossier_station, f"{sensor}.csv")
+
+        if os.path.exists(fichier_csv):
+            raise FileExistsError(f"Fichier déjà existant : {fichier_csv}")
+
+        df_full.to_csv(fichier_csv)
+
+        print(f"[{compteur_fichiers+1}/{len(sensor_list)}] station_{station_id}/{sensor}")
+        compteur_fichiers += 1
+
+    for folder, lignes in lignes_meta.items():
+        chemin_meta = os.path.join(base_dest_dir, folder, "metadata.csv")
+        os.makedirs(os.path.dirname(chemin_meta), exist_ok=True)
+        pd.DataFrame(lignes, columns=cols_meta).to_csv(chemin_meta, index=False)
+
+    print(f"\n---\nTerminé ! {compteur_fichiers} sites traités avec succès.")
+    for folder, lignes in lignes_meta.items():
+        print(f"  {folder}: {len(lignes)} station(s)")
+
+
+def download_station_meteo(base_dest_dir):
+    """
+    Télécharge les données météo ERA5 (horaire + quotidienne) par station ISMN,
+    à partir des `metadata.csv` de chaque folder_depth. (migré depuis csv_for_hrsm.ipynb, cell 15)
+    """
+    print("\n--- Téléchargement des données météo ERA5 par station ---")
+
+    meta_pattern = os.path.join(base_dest_dir, "depth_*", "metadata.csv")
+    for chemin_meta in glob.glob(meta_pattern):
+        folder = os.path.basename(os.path.dirname(chemin_meta))
+        df_meta = pd.read_csv(chemin_meta)
+        for _, row in df_meta.iterrows():
+            station_id = row['station_id']
+            lat = row['latitude']
+            lon = row['longitude']
+            dossier_station = os.path.join(base_dest_dir, folder, f"station_{station_id}")
+            meteo_hourly_path = os.path.join(dossier_station, "meteo_hourly.csv")
+            meteo_daily_path = os.path.join(dossier_station, "meteo_daily.csv")
+            if os.path.isfile(meteo_hourly_path) and os.path.isfile(meteo_daily_path) \
+               and os.path.getsize(meteo_hourly_path) > 0 and os.path.getsize(meteo_daily_path) > 0:
+                print(f"[{folder}/station_{station_id}] déjà traité. Skip.")
+                continue
+
+            # Chercher tous les CSVs de capteurs pour déterminer la plage de dates
+            csv_files = sorted(f for f in os.listdir(dossier_station) if f.endswith('.csv') and f != 'meteo_hourly.csv' and f != 'meteo_daily.csv')
+            if not csv_files:
+                continue
+
+            global_start, global_end = None, None
+            for fname in csv_files:
+                df_temp = pd.read_csv(os.path.join(dossier_station, fname), parse_dates=['date_time'])
+                if global_start is None or df_temp['date_time'].min() < global_start:
+                    global_start = df_temp['date_time'].min()
+                if global_end is None or df_temp['date_time'].max() > global_end:
+                    global_end = df_temp['date_time'].max()
+
+            print(f"[{folder}/station_{station_id}] {global_start:%Y-%m-%d} → {global_end:%Y-%m-%d}")
+
+            # Téléchargement horaire
+            df_meteo_hourly = get_meteo_data_hourly(lat, lon, global_start, global_end)
+            if df_meteo_hourly.empty:
+                print(f"  Pas de données ERA5")
+                continue
+            # Sauvegarde horaire
+            path_hourly = os.path.join(dossier_station, "meteo_hourly.csv")
+            df_meteo_hourly.to_csv(path_hourly, index=True, index_label='date_time')
+
+            # Météo quotidienne
+            df_meteo_daily = get_meteo_data(lat, lon, global_start, global_end)
+            if df_meteo_daily.empty:
+                print(f"  Pas de données ERA5")
+                continue
+            # Sauvegarde quotidienne
+            path_daily = os.path.join(dossier_station, "meteo_daily.csv")
+            df_meteo_daily.to_csv(path_daily, index=True, index_label='date_time')
+
+            print(f"  ✓ meteo_hourly.csv ({len(df_meteo_hourly)} lignes), meteo_daily.csv ({len(df_meteo_daily)} lignes)")
+
+
+def enrich_stations_with_satellites(input_dir):
+    """
+    Enrichit chaque csv de sonde ISMN avec les bandes satellites (S2/S1/HLS).
+    (migré depuis csv_for_hrsm.ipynb, cell 20)
+    """
+    csv_list = glob.glob(os.path.join(input_dir, "*", "*", "*soil_moisture*.csv"))
+
+    for csv_file in csv_list:
+        df = pd.read_csv(csv_file)
+        if 'soil_moisture' not in df.columns:
+            print(f"Colonne soil_moisture absente → ignoré")
+            continue
+        if any(c.startswith(('S2_', 'S1_', 'HLS_')) for c in df.columns):
+            print(f"{os.path.basename(csv_file)} déjà enrichi, ignoré")
+            continue
+        enrich_csv_with_satellites(csv_file, "", "")
+
+
+def patch_missing_topo(master_path):
+    """
+    Ajoute les DEM manquants (slope/aspect/twi/élévation) via GEE (JAXA ALOS)
+    + WhiteboxTools, sur le CSV de propriétés du sol ISMN passé en paramètre.
+    (migré depuis csv_for_hrsm.ipynb, cell 24)
+    """
+    import ee
+    import requests
+    import tempfile
+    import rasterio
+
+    # Initialisation de GEE
+    try:
+        ee.Initialize()
+    except Exception as e:
+        print("Authentification à Google Earth Engine...")
+        ee.Authenticate()
+        ee.Initialize()
+
+    print("--- EXÉCUTION DU PATCH DEM AVEC GEE (JAXA ALOS) + WHITEBOX TOOLS ---")
+    df_all_sites_soil = pd.read_csv(master_path)
+    df_missing_topo = df_all_sites_soil[df_all_sites_soil['dem_twi'].isna() | df_all_sites_soil['dem_slope'].isna() | df_all_sites_soil['dem_aspect'].isna()]
+
+    # Identifier les sites manquants uniques
+    missing_coords = df_missing_topo[['latitude', 'longitude']].drop_duplicates()
+
+    # Charger le DEM de la JAXA via GEE
+    dem = ee.ImageCollection("JAXA/ALOS/AW3D30/V4_1").select('DSM').mosaic()
+
+    # On stocke les résultats
+    dem_patch_results = {}
+
+    for _, row in missing_coords.iterrows():
+        lat = row['latitude']
+        lon = row['longitude']
+
+        print(f"\nCorrection pour (lat={lat}, lon={lon})...")
+        try:
+            # Créer une bounding box autour du point pour l'analyse topographique
+            buffer_deg = 0.02
+            bbox = ee.Geometry.Rectangle([lon - buffer_deg, lat - buffer_deg, lon + buffer_deg, lat + buffer_deg])
+
+            # Récupérer l'URL de téléchargement direct du GeoTIFF
+            url = dem.getDownloadURL({
+                'scale': 30,
+                'crs': 'EPSG:4326',
+                'region': bbox,
+                'format': 'GEO_TIFF'
+            })
+
+            # Télécharger et traiter en local
+            response = requests.get(url)
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                raw_dem_path = os.path.join(tmp_dir, "raw_dem.tif")
+                dem_path = os.path.join(tmp_dir, "dem.tif")
+                with open(raw_dem_path, "wb") as f:
+                    f.write(response.content)
+
+                # WhiteboxTools est très stricte sur le format des fichiers.
+                # Les TIF de GEE contiennent souvent des métadonnées ou compressions qu'il n'aime pas.
+                # On ré-écrit le TIF proprement via rasterio avant de lui passer.
+                with rasterio.open(raw_dem_path) as src:
+                    data = src.read(1)
+                    profile = src.profile.copy()
+                    data = data.astype('float32') # Float32 est plus standard pour algorithmes topographiques
+                    profile.update(dtype='float32', compress='lzw', nodata=-9999.0)
+
+                with rasterio.open(dem_path, 'w', **profile) as dst:
+                    dst.write(data, 1)
+
+                topo_data = {}
+                # Lire l'élévation au centre
+                with rasterio.open(dem_path) as src:
+                    val = next(src.sample([(lon, lat)]))[0]
+                    topo_data['dem_m_30m_depth'] = val
+
+                # Calculer slope, aspect, TWI avec WhiteboxTools
+                output_records = compute_and_save_terrain_attributes(dem_path, verbose=True)
+
+                for rec in output_records:
+                    attr_name = rec["output_stem"].split('_')[-1] # slope, aspect ou twi
+                    with rasterio.open(rec['local_path']) as src:
+                        val = next(src.sample([(lon, lat)]))[0]
+                        topo_data[f'dem_{attr_name}'] = val
+
+            print(f" Attributs extraits: {topo_data}")
+            dem_patch_results[(lat, lon)] = topo_data
+
+        except Exception as e:
+            print(f" Erreur pour ({lat}, {lon}): {e}")
+
+    # Mise à jour de df_all_sites_soil
+    for index, row in df_all_sites_soil.iterrows():
+        lat = row['latitude']
+        lon = row['longitude']
+
+        # Si on a un résultat calculé
+        if tuple([lat, lon]) in dem_patch_results:
+            res = dem_patch_results[(lat, lon)]
+            print(f"\nMise à jour pour index {index} (lat={lat}, lon={lon})...")
+            if res:
+                df_all_sites_soil.at[index, 'dem_m_30m_depth'] = res.get('dem_m_30m_depth', np.nan)
+                df_all_sites_soil.at[index, 'dem_slope'] = res.get('dem_slope', np.nan)
+                df_all_sites_soil.at[index, 'dem_aspect'] = res.get('dem_aspect', np.nan)
+                df_all_sites_soil.at[index, 'dem_twi'] = res.get('dem_twi', np.nan)
+
+    print("\n--- PATCH TERMINE ---")
+    print("Vérification des lignes restantes avec des NaN (devrait être vide si tout a réussi) :")
+    print(df_all_sites_soil[df_all_sites_soil['dem_twi'].isna()])
+
+    # Sauvegarder à nouveau le master csv pour valider le correctif
+    export_path = master_path
+    df_all_sites_soil.to_csv(export_path, index=False)
+    print(f"Sauvegardé avec correctifs dans {export_path}")
+
+
+def nearest_field(lat, lon, field_centers):
+    """
+    Nom du champ le plus proche (coordonnées représentatives) d'un point (lat, lon).
+    (migré depuis Visualisation_Osiris.ipynb)
+    """
+    best, bd = None, 1e9
+    for name, (fla, flo) in field_centers.items():
+        d = ((lat - fla) ** 2 + (lon - flo) ** 2) ** 0.5
+        if d < bd:
+            best, bd = name, d
+    return best
+
+
+def assign_field(row, clusters, field_names, max_dist):
+    """
+    Assigne une ligne sur les `clusters` (points uniques) les plus proches, à condition
+    d'être à moins de `max_dist` degrés ; retourne le nom du champ (ou None).
+    (migré depuis Visualisation_Osiris.ipynb)
+    """
+    best, bd = None, 1e9
+    for i, c in enumerate(clusters):
+        d = ((row["latitude"] - c["lat"]) ** 2 + (row["longitude"] - c["lon"]) ** 2) ** 0.5
+        if d < bd:
+            best, bd = i, d
+    return field_names[best] if bd <= max_dist else None
+
+
+def _aggregate_eps_points(df, eps=0.01):
+    """
+    Agrège des mesures GPS en points uniques (clusters) sous un rayon `eps` (degrés),
+    triés par nombre de mesures décroissant. Retourne une liste de dict lat/lon/count.
+    (migré depuis Visualisation_Osiris.ipynb)
+    """
+    _centers, _counts = [], []
+    for _p in df[["latitude", "longitude"]].values:
+        if _centers and np.min(np.linalg.norm(np.array(_centers) - _p, axis=1)) <= eps:
+            _counts[np.argmin(np.linalg.norm(np.array(_centers) - _p, axis=1))] += 1
+        else:
+            _centers.append(list(_p)); _counts.append(1)
+
+    return [
+        {"lat": float(la), "lon": float(lo), "count": int(n)}
+        for (la, lo), n in sorted(zip(_centers, _counts), key=lambda x: -x[1])
+    ]
+
+
+def build_osiris_2024_folders(probes_path, base_dir, field_centers, top_n=2, max_dist=0.02):
+    """
+    Écrit les dossiers `Osiris_2024/ChampX/<no_serie>.csv` à partir de `probes_2024.csv` :
+    chaque ligne est assignée à un champ (points uniques les plus mesurés, seuil max_dist),
+    puis groupée par (champ, sonde).
+    (migré depuis Visualisation_Osiris.ipynb, cellules 'Humidité par Champ 2024' + écriture)
+    """
+    evo = pd.read_csv(probes_path)
+    evo["timestamp"] = pd.to_datetime(evo["timestamp"], utc=True)
+    evo = evo.dropna(subset=["humidity_10cm", "latitude", "longitude"])
+    evo = evo[(evo["longitude"] != 0) | (evo["latitude"] != 0)]
+
+    csv_points = _aggregate_eps_points(evo)
+    top_points = csv_points[:top_n]
+    top_fields = [nearest_field(p["lat"], p["lon"], field_centers) for p in top_points]
+    print("Correspondance points -> champs :")
+    for i, (p, f) in enumerate(zip(top_points, top_fields)):
+        print(f"  Point {i} (count={p['count']}) -> {f}")
+
+    evo["field"] = evo.apply(lambda row: assign_field(row, top_points, top_fields, max_dist), axis=1)
+    evo = evo.dropna(subset=["field"])
+
+    _nb = 0
+    for _field, _g in evo.groupby("field"):
+        _dir = os.path.join(base_dir, f"Champ{_field}")
+        os.makedirs(_dir, exist_ok=True)
+        for _ns, _gg in _g.groupby("no_serie"):
+            _out = os.path.join(_dir, f"{_ns}.csv")
+            _gg.drop(columns=["field"]).to_csv(_out, index=False)
+            _nb += 1
+            print(f"écrit : {_out} ({len(_gg)} lignes)")
+
+    print(f"\n{_nb} fichiers écrits dans {base_dir}")
+    return _nb
+
+
+def apply_coupes(df, regles):
+    """
+    Applique les règles de coupe (points aberrants) sur un DataFrame avec colonnes
+    field, name, timestamp. Règle = (field, name, timestamp_min, timestamp_max).
+    (migré depuis Visualisation_Osiris.ipynb)
+    """
+    mask = pd.Series(True, index=df.index)
+    for field, name, tmin, tmax in regles:
+        m = df["field"] == field
+        if name is not None:
+            m &= df["name"] == name
+        if tmin is not None:
+            m &= df["timestamp"] < pd.Timestamp(tmin, tz="UTC")
+        if tmax is not None:
+            m &= df["timestamp"] > pd.Timestamp(tmax, tz="UTC")
+        mask &= ~m  # on retire les lignes concernées
+    return df[mask]
+
+
+def build_osiris_2025_folders(all_data_path, base_dir, coupes):
+    """
+    Écrit les dossiers `Osiris_2025/<Champ>/<name>.csv` à partir de `all_data.csv`
+    après application des règles de coupe (`apply_coupes`).
+    (migré depuis Visualisation_Osiris.ipynb, cellules 'Étape 6' + écriture)
+    """
+    _df_all = pd.read_csv(all_data_path)
+    _df_all["timestamp"] = pd.to_datetime(_df_all["timestamp"], format="mixed")
+    _df_all = _df_all.sort_values("timestamp")
+
+    _df_all = apply_coupes(_df_all, coupes)
+
+    _nb = 0
+    for _field, _g in _df_all.groupby("field"):
+        _dir = os.path.join(base_dir, _field)
+        os.makedirs(_dir, exist_ok=True)
+        for _name, _gg in _g.groupby("name"):
+            _out = os.path.join(_dir, f"{_name}.csv")
+            _gg.to_csv(_out, index=False)
+            _nb += 1
+            print(f"écrit : {_out} ({len(_gg)} lignes)")
+
+    print(f"\n{_nb} fichiers écrits dans {base_dir}")
+    return _nb
+
+
+########################################################################################################################
+# --- Uniformisation du dataset Osiris (Osiris_unified, migré depuis csv_for_hrsm.ipynb) ---
+########################################################################################################################
+
+OSIRIS_HUM = [f"humidity_{d}cm" for d in [10, 20, 30, 40, 50, 60]]
+OSIRIS_COMMON_ORDER = ["hour", "latitude", "longitude", "no_serie"] + OSIRIS_HUM
+
+
+def clean_filename(name):
+    """Remplace les espaces d'un nom de fichier par des underscores."""
+    return name.replace(" ", "_")
+
+
+def normalize_sonde(df, year, out_serie):
+    """Met une sonde au format commun minimal : hour, latitude, longitude, no_serie, humidity_*cm."""
+    df = df.copy()
+    if year == "2025":
+        # 2025 : garder hour tel quel, ne retenir que les colonnes communes
+        df = df[["hour", "latitude", "longitude", "no_serie"] + OSIRIS_HUM].copy()
+        df["hour"] = pd.to_datetime(df["hour"], utc=True)
+        df["no_serie"] = out_serie
+    else:
+        # 2024 : timestamp 5 min -> hour (floor + moyenne par heure)
+        t = pd.to_datetime(df["timestamp"], utc=True)
+        df["hour"] = t.dt.floor("h")
+        df = df.drop(columns=["timestamp"])
+        keep_first = ["latitude", "longitude", "no_serie"]
+        agg = {c: ("first" if c in keep_first else "mean")
+               for c in df.columns if c != "hour" and c in (["latitude", "longitude", "no_serie"] + OSIRIS_HUM)}
+        df = df.filter(items=["hour", "latitude", "longitude", "no_serie"] + OSIRIS_HUM).groupby("hour", as_index=False).agg(agg)
+        df["hour"] = pd.to_datetime(df["hour"], utc=True)
+        df["no_serie"] = out_serie
+    for c in df.columns:
+        if c not in ("hour", "no_serie"):
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df[OSIRIS_COMMON_ORDER]
+
+
+def build_osiris_unified(osiris_root, field_map):
+    """
+    Construit le dataset unifié `Osiris_unified/<année>_<champ>/` depuis les dossiers
+    souces `Osiris_2024` et `Osiris_2025` (sondes normalisées, enrichissements météo/
+    satellite copiés, sites_and_soil.csv régénéré avec les nouveaux site_id).
+    (migré depuis csv_for_hrsm.ipynb, cellules 32-34)
+    """
+    import shutil
+
+    SRC_YEARS = {
+        "2024": os.path.join(osiris_root, "Osiris_2024"),
+        "2025": os.path.join(osiris_root, "Osiris_2025"),
+    }
+    UNIFIED = os.path.join(osiris_root, "Osiris_unified")
+    os.makedirs(UNIFIED, exist_ok=True)
+
+    site_rows = []
+    for (year, src_field), dst_field in field_map.items():
+        src_dir = os.path.join(SRC_YEARS[year], src_field)
+        dst_dir = os.path.join(UNIFIED, dst_field)
+        os.makedirs(dst_dir, exist_ok=True)
+
+        # 1) Fichiers sondes transformés
+        for fname in sorted(os.listdir(src_dir)):
+            if not fname.endswith(".csv") or fname in ("meteo_daily.csv", "meteo_hourly.csv", "sentinel_data.csv"):
+                continue
+            df = pd.read_csv(os.path.join(src_dir, fname))
+            out_serie = os.path.splitext(clean_filename(fname))[0]
+            df_norm = normalize_sonde(df, year, out_serie)
+            df_norm.to_csv(os.path.join(dst_dir, out_serie + ".csv"), index=False)
+
+        # 2) Copie des enrichissements (météo, satellite)
+        for extra in ("meteo_daily.csv", "meteo_hourly.csv", "sentinel_data.csv"):
+            src_extra = os.path.join(src_dir, extra)
+            if os.path.isfile(src_extra):
+                shutil.copy2(src_extra, os.path.join(dst_dir, extra))
+
+        # 3) Ligne site pour sites_and_soil.csv unifié
+        sites_soil = pd.read_csv(os.path.join(SRC_YEARS[year], "sites_and_soil.csv"))
+        row = sites_soil[sites_soil["site_id"] == src_field].iloc[0].to_dict()
+        row["site_id"] = dst_field
+        site_rows.append(row)
+
+        print(f"✓ {src_field:16s} -> {dst_field:20s}")
+
+    df_sites = pd.DataFrame(site_rows)
+    df_sites.to_csv(os.path.join(UNIFIED, "sites_and_soil.csv"), index=False)
+    print(f"\nsites_and_soil.csv écrit : {os.path.join(UNIFIED, 'sites_and_soil.csv')}")
+    print(df_sites[["site_id", "latitude", "longitude"]])
+    print(f"\nRésultat dans : {UNIFIED}")
+    return df_sites

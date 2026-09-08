@@ -115,7 +115,7 @@ def save_to_results_csv(
         timestamp | type | depth | lookback | horizon | nb_windows | model |
         features | metric_name | value | value_std | Network
     
-    Types possibles: GLOBAL, DETAILED, GRANDVILLERS, CROSSVAL
+    Types possibles: GLOBAL, DETAILED, CROSSVAL
     """
     import os
     from datetime import datetime
@@ -134,7 +134,8 @@ def save_to_results_csv(
     # Colonnes standard (certaines peuvent être vides selon le type)
     columns = [
         'timestamp', 'features', 'experience_name', 'type', 'depth', 'lookback', 'horizon', 'nb_windows',
-        'model', 'metric_name', 'value', 'value_std', 'network'
+        'model', 'metric_name', 'value', 'value_std', 'network',
+        'val_site'
        ]
 
     # Créer une nouvelle ligne avec les colonnes manquantes remplies de None

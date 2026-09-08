@@ -266,15 +266,10 @@ Au-delà de l'entraînement standard sur les réseaux ISMN, le pipeline couvre �
 - `osiris_train(feat_cfg, drive_dir, all_dfs)` : Entraîne des modèles **from scratch** sur les données Osiris (split spatial par site, une combinaison par profondeur/lookback/horizon/nb_windows/modèle/réseau).
 - `osiris_fine_tuning(feat_cfg, drive_dir, all_dfs)` : **Fine-tuning** d'un modèle pré-entraîné sur les données Osiris (adaptation du modèle à la distribution des champs d'Osiris).
 - `fine_tune_model(...)` : Fonction bas niveau qui poursuit l'entraînement d'un modèle chargé sur les segments d'entraînement/validation fournis.
-- `full_eval_osiris(feat_cfg, drive_dir, all_dfs)` + `run_osiris_evaluation(...)` + `evaluate_on_probes(...)` : Évaluation des modèles sur les parcelles/probes d'Osiris (chargement des modèles sauvegardés et de leurs scalers via `load_saved_model_and_scalers`).
+- `full_eval_osiris(feat_cfg, drive_dir, all_dfs)` + `run_osiris_evaluation(...)` + `evaluate(...)` : Évaluation des modèles sur les parcelles/probes d'Osiris (chargement des modèles sauvegardés et de leurs scalers via `load_saved_model_and_scalers`).
+- `train_from_scratch(...)` : Entraînement partagé (from scratch) entre ISMN et Osiris ; `evaluate(...)` : évaluation unifiée (probe_type='OSIRIS' → métriques `*_osiris`, probe_type='ISMN' → métriques sans suffixe).
 
-#### Évaluation comparée Grandvillers (données locales vs ERA5)
-- `Get_Grandvillers_data(project_path)` : Charge les données de test du champ de **Grandvillers** (dossier `Grandvillers_satellites`).
-- `prepare_era5_dataset(df_local, display_name, lat, lon)` : Télécharge/associe les données météo **ERA5**, affiche une comparaison avec les données locales, et retourne un DataFrame dont les features météo ont été **remplacées** par celles d'ERA5.
-- `run_comparative_evaluation(model, scaler_x, scaler_y, lst_local, lst_era5, ...)` : Évalue un modèle sur les deux variantes (données locales vs données ERA5).
-- `full_eval_grandvillers(feat_cfg, drive_dir, test_list_local, test_list_era5)` : Boucle d'évaluation complète sur Grandvillers, comparant les prédictions issues des données locales et des données ERA5.
-
-Ces étapes sont orchestrées dans `Soil_Moisture_Training.py` (chargement des données Grandvillers et ERA5, évaluation Osiris en option).
+Ces étapes sont orchestrées dans `Soil_Moisture_Training.py`.
 
 ---
 

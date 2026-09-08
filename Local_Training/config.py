@@ -1,4 +1,7 @@
 import os
+os.environ['TF_DETERMINISTIC_OPS'] = '1'
+os.environ['TF_CUDNN_DETERMINISTIC'] = '1'
+
 import numpy as np
 import tensorflow as tf
 
@@ -25,19 +28,11 @@ ROOT_DIR = _env_or(
     "/home/theo/Dataset",  # Si on local machine
 )
 
-# osiris_dir utilisé par get_osiris_data (dataset unifié)
-OSIRIS_DIR = _env_or("OSIRIS_DIR", os.path.join(ROOT_DIR, "Osiris_unified"))
-
 # Dataset Osiris unifié (format commun hour + colonnes harmonisées), produit par
 # la section "ADAPTATION" de csv_for_hrsm.ipynb. C'est le répertoire de référence
-# pour le leave-one-field-out. Sur Colab, placé à côté de station_depth_csv
-# (dataset_training/Osiris_unified).
-OSIRIS_DIR_UNIFIED = _env_or(
-    "OSIRIS_DIR_UNIFIED",
-    os.path.join(ROOT_DIR, "Osiris_unified"),
-)
-
-Grandvillers_path = os.path.join(ROOT_DIR, "Grandvillers_data")
+# pour le leave-one-field-out (utilisé par get_osiris_data). Sur Colab, placé à
+# côté de station_depth_csv (dataset_training/Osiris_unified/...).
+OSIRIS_DIR = _env_or("OSIRIS_DIR", os.path.join(ROOT_DIR, "Osiris_unified"))
 
 # Répertoires Osiris bruts (2024 et 2025) — local uniquement
 OSIRIS_DIR_2024 = "/home/theodore/Documents/Get_Datasets/Osiris_data/Osiris_2024"
@@ -61,10 +56,6 @@ MASTER_CSV_PATH = os.path.join(ROOT_DIR, FOLDER_ISMN, "Soil_Properties_Master.cs
 
 base_path = os.path.join(ROOT_DIR, FOLDER_ISMN, "depth")
 
-FULL_DENSE_h = [ "soil_moisture", "ET0", "IRRAD", "TMIN", "TMAX", "VAP", "WIND", "RAIN",
-              "VPD", "T_RANGE",
-              "RAIN_CUM_3D", "RAIN_CUM_7D", "RAIN_CUM_14D",
-              "doy_sin", "doy_cos"]
 
 FULL_DENSE = [  "ET0", "IRRAD", "TMIN", "TMAX", "VAP", "WIND", "RAIN",
               "VPD", "T_RANGE",
@@ -152,22 +143,22 @@ FEATURE_CONFIGS = [
      "models": ["lightgbm"],
      "networks": ALL_NETWORKS},
 
-    {"name": "Features_S1_lightgbm", "dense": FULL_DENSE, "soil": FULL_SOIL, "sparse": [],
+    {"name": "Features_Meteo_Soil", "dense": FULL_DENSE, "soil": FULL_SOIL, "sparse": [],
      "lookbacks": [1], "horizons": [7], "depths": DEPTHS, "nb_windows": [50000],
         "models": ["lightgbm"],
         "networks": ALL_NETWORKS},
 
-    {"name": "Features_S1_lightgbm", "dense": FULL_DENSE, "soil": [], "sparse": FULL_SPARSE_S1,
+    {"name": "Features_Meteo_S1", "dense": FULL_DENSE, "soil": [], "sparse": FULL_SPARSE_S1,
      "lookbacks": [1], "horizons": [7], "depths": DEPTHS, "nb_windows": [50000],
         "models": ["lightgbm"],
         "networks": ALL_NETWORKS},
 
-    {"name": "Features_S1_lightgbm", "dense": [], "soil": FULL_SOIL, "sparse": FULL_SPARSE_S1,
+    {"name": "Features_Soil_S1", "dense": [], "soil": FULL_SOIL, "sparse": FULL_SPARSE_S1,
      "lookbacks": [1], "horizons": [7], "depths": DEPTHS, "nb_windows": [50000],
         "models": ["lightgbm"],
         "networks": ALL_NETWORKS},
 
-    {"name": "Features_S1_lightgbm", "dense": FULL_DENSE, "soil": FULL_SOIL, "sparse": FULL_SPARSE_S1,
+    {"name": "Features_Meteo_Soil_S1", "dense": FULL_DENSE, "soil": FULL_SOIL, "sparse": FULL_SPARSE_S1,
      "lookbacks": [1], "horizons": [7], "depths": DEPTHS, "nb_windows": [50000],
         "models": ["lightgbm"],
         "networks": ALL_NETWORKS},
