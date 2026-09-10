@@ -6,38 +6,17 @@ import numpy as np
 import tensorflow as tf
 
 
-def _env_or(name: str, default: str) -> str:
-    """Lit une variable d'environnement, sinon renvoie la valeur locale par défaut.
-
-    Permet au notebook Colab de surcharger les chemins (ROOT_DIR, OUTPUT_DIR, ...)
-    avant l'import de config, sans modifier ce fichier."""
-    return os.environ.get(name, default)
-
-
 # ---------------------------------------------------------------
-# Chemins — surchargeables via variables d'environnement (Colab).
-# Défauts : chemins locaux.
+# Chemins (these)
 # ---------------------------------------------------------------
 
-# Nom du répertoire de sortie. Colab : OUTPUT_NAME doit être défini par le
-# notebook (ex. "Fine_Tuning_Osiris"). Local : "Fine_Tuning".
-FOLDER_NAME = _env_or("OUTPUT_NAME", "Fine_Tuning")
+FOLDER_NAME = "Fine_Tuning"
 
-ROOT_DIR = _env_or(
-    "ROOT_DIR",
-    "/home/theo/Dataset",  # Si on local machine
-)
+ROOT_DIR = os.path.join("/home/theo", "Dataset")
 
-# Dataset Osiris unifié (format commun hour + colonnes harmonisées), produit par
-# la section "ADAPTATION" de csv_for_hrsm.ipynb. C'est le répertoire de référence
-# pour le leave-one-field-out (utilisé par get_osiris_data). Sur Colab, placé à
-# côté de station_depth_csv (dataset_training/Osiris_unified/...).
-OSIRIS_DIR = _env_or("OSIRIS_DIR", os.path.join(ROOT_DIR, "Osiris_unified"))
+OSIRIS_DIR = os.path.join(ROOT_DIR, "Osiris_unified")
 
-drive_dir = _env_or(
-    "DRIVE_DIR",
-    os.path.join("/home/theo/Documents", FOLDER_NAME, "outputs"),  # Si on local machine
-)
+drive_dir = os.path.join("/home/theo", "Documents", FOLDER_NAME, "outputs")
 
 RESULTS_CSV_PATH = os.path.join(drive_dir, "results.csv")
 
@@ -79,14 +58,13 @@ FULL_SPARSE_HLS30 = ["HLS_B2", "HLS_B3", "HLS_B4", "HLS_B5",
                      "HLS_B6", "HLS_B7", "HLS_B9", "HLS_B10", "HLS_B11", "HLS_NDVI"]
 
 # Training settings
+NB_WINDOWS = [100000]    # number of windows to sample for training
 HORIZONS = [7]              # predict * days ahead 
 LOOKBACK = [7]                  # use past * days to predict next day
 DEPTHS = [0.1, #0.5]
            0.2, 0.3, 0.4, 0.5]  # we will loop over these depths and train one model per depth
 ALL_NETWORKS = [
     "all"]
-
-    # ["COSMOS-UK", "GROW", "PTSMN", "TAHMO", "TERENO"]
 SEPARATE_NETWORKS = [
 
      ["COSMOS-UK"],
@@ -108,27 +86,10 @@ MODELS = ["lstm"]
 def _without(lst, *items):
     return [x for x in lst if x not in items]
 
-FEATURE_CONFIGS = [
-
-    {"name": "Osiris_train", "dense": FULL_DENSE, "soil": FULL_SOIL, "sparse": FULL_SPARSE,
-     "lookbacks": [7], "horizons": [7], "depths": DEPTHS, "nb_windows": [50000],
-        "models": ["lstm"],
-        "networks": ALL_NETWORKS},
-
-
-    # {"name": "Fine_Tuning", "dense": FULL_DENSE, "soil": FULL_SOIL, "sparse": FULL_SPARSE,
-    #  "lookbacks": [7], "horizons": [7], "depths": DEPTHS, "nb_windows": [50000],
-    #     "models": ["lstm"],
-    #     "networks": ALL_NETWORKS},
-
-]
-
-SAVE_PLOTS = True
-SAVE_NETWORKS_DIR = True
-SAVE_MODELS_DIR = True
+SAVE_PLOTS = False
+SAVE_NETWORKS_DIR = False
+SAVE_MODELS_DIR = False
 SAVE_RESULTS_CSV = True
-
-
 
 TARGET_COL = "soil_moisture"
 DATE_COL = "date_time"  # L'index temporel est sauvegardé sous date_time par process_timeseries

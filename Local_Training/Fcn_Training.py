@@ -688,11 +688,13 @@ def train_from_scratch(train_segments, val_segments, drive_dir, LB, horizon, m, 
     return model, scaler_x, scaler_y
 
 
-def osiris_train(feat_cfg, drive_dir, all_dfs):
+def osiris_train(feat_cfg, drive_dir, all_dfs, test_sites=None):
     """Entraîne des modèles from scratch sur les données OSIRIS, en leave-one-field-out.
 
     Pour chaque champ utilisé comme test, un des champs restants sert de validation
-    et les autres d'entraînement. Aucune fuite entre les trois parties."""
+    et les autres d'entraînement. Aucune fuite entre les trois parties.
+
+    test_sites: liste optionnelle de site_ids à traiter (reprise partielle). None = tous."""
 
     depths = feat_cfg["depths"]
     lookbacks = feat_cfg["lookbacks"]
@@ -705,6 +707,9 @@ def osiris_train(feat_cfg, drive_dir, all_dfs):
     features_name = feature_name_path(RESULTS_CSV_PATH, feature_cols)
 
     site_ids = sorted(list(set(site['site_id'].iloc[0] for site in all_dfs)))
+    if test_sites is not None:
+        site_ids = [s for s in site_ids if s in test_sites]
+        print(f"test_sites limité à: {site_ids} (demandés: {test_sites})")
     print(f"Unique site_ids: {site_ids}")
 
     for test_site in site_ids:

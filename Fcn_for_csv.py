@@ -1927,6 +1927,81 @@ def apply_coupes(df, regles):
     return df[mask]
 
 
+def build_osiris_2026_folders(raw_csv, base_dir, eps=0.02):
+    """
+    Écrit les dossiers `Osiris_2026/<Champ X>/<no_serie>.csv` à partir de `osiris_2026.csv`.
+    Les champs sont déduits des coordonnées des sondes (regroupement par proximité eps) :
+    chaque groupe est nommé Champ A, B, ... (trié par latitude décroissante).
+
+    Colonnes produites (format commun, comme 2025, mais brutes 15 min) :
+    timestamp, latitude, longitude, no_serie, humidity_10cm..60cm
+    (remap de `ts` -> `timestamp`, `probe_serial_number` -> `no_serie`,
+     `humidity_XXcm_value` -> `humidity_XXcm`).
+    Les sondes sans coordonnées (ex: 115260) sont exclues.
+    """
+    import pandas as pd
+    df = pd.read_csv(raw_csv)
+    df["timestamp"] = pd.to_datetime(df["ts"], utc=True)
+
+    # --- regroupement des sondes en champs (même logique que Visualisation_Osiris_2026) ---
+    probes = []
+    for s, g in df.groupby("probe_serial_number"):
+        lat = g["latitude"].dropna().mean()
+        lon = g["longitude"].dropna().mean()
+        probes.append({"no_serie": s, "lat": lat, "lon": lon, "count": len(g)})
+    probes.sort(key=lambda x: -x["count"])
+
+    clusters, assignments = [], {}
+    for pr in probes:
+        if not np.isfinite(pr["lat"]) or not np.isfinite(pr["lon"]):
+            assignments[pr["no_serie"]] = None
+            continue
+        matched = None
+        for c in clusters:
+            if ((pr["lat"] - c["lat"]) ** 2 + (pr["lon"] - c["lon"]) ** 2) ** 0.5 <= eps:
+                matched = c
+                break
+        if matched is None:
+            matched = {"lat": pr["lat"], "lon": pr["lon"], "members": []}
+            clusters.append(matched)
+        matched["members"].append(pr["no_serie"])
+        assignments[pr["no_serie"]] = clusters.index(matched)
+
+    order = sorted(range(len(clusters)), key=lambda i: -clusters[i]["lat"])
+    label = {i: f"Champ {chr(65 + j)}" for j, i in enumerate(order)}
+    field_of = {serie: label[i] for serie, i in assignments.items() if i is not None}
+
+    # --- remap colonnes ---
+    df["no_serie"] = df["probe_serial_number"]
+    for d in [10, 20, 30, 40, 50, 60]:
+        df[f"humidity_{d}cm"] = df[f"humidity_{d}cm_value"]
+    keep = ["timestamp", "latitude", "longitude", "no_serie"] + OSIRIS_HUM
+    df = df[keep]
+    df = df.dropna(subset=OSIRIS_HUM + ["latitude", "longitude"])
+    df = df[df["no_serie"].isin(field_of)]
+    df["field"] = df["no_serie"].map(field_of)
+
+    nb = 0
+    for field, g in df.groupby("field"):
+        d = os.path.join(base_dir, field)
+        os.makedirs(d, exist_ok=True)
+        for ns, gg in g.groupby("no_serie"):
+            gg.drop(columns=["field"]).sort_values("timestamp").to_csv(
+                os.path.join(d, f"{ns}.csv"), index=False)
+            nb += 1
+            print(f"écrit : {os.path.join(d, str(ns) + '.csv')} ({len(gg)} lignes)")
+
+    # sites.csv (sans propriétés sol, remplies par get_features)
+    sites_df = pd.DataFrame([
+        {"site_id": label[i], "longitude": c["lon"], "latitude": c["lat"]}
+        for i, c in enumerate(clusters)
+    ])
+    sites_df.to_csv(os.path.join(base_dir, "sites.csv"), index=False)
+    print(f"\nsites.csv écrit : {os.path.join(base_dir, 'sites.csv')}")
+    print(f"{nb} fichiers écrits dans {base_dir} | champ -> {field_of}")
+    return nb
+
+
 def build_osiris_2025_folders(all_data_path, base_dir, coupes):
     """
     Écrit les dossiers `Osiris_2025/<Champ>/<name>.csv` à partir de `all_data.csv`
@@ -1994,16 +2069,15 @@ def normalize_sonde(df, year, out_serie):
 def build_osiris_unified(osiris_root, field_map):
     """
     Construit le dataset unifié `Osiris_unified/<année>_<champ>/` depuis les dossiers
-    souces `Osiris_2024` et `Osiris_2025` (sondes normalisées, enrichissements météo/
-    satellite copiés, sites_and_soil.csv régénéré avec les nouveaux site_id).
+    souces `Osiris_2024` / `Osiris_2025` / `Osiris_2026` (sondes normalisées,
+    enrichissements météo/satellite copiés, sites_and_soil.csv régénéré avec les
+    nouveaux site_id).
     (migré depuis csv_for_hrsm.ipynb, cellules 32-34)
     """
     import shutil
 
-    SRC_YEARS = {
-        "2024": os.path.join(osiris_root, "Osiris_2024"),
-        "2025": os.path.join(osiris_root, "Osiris_2025"),
-    }
+    # années présentes dans field_map -> dossier source correspondant
+    SRC_YEARS = {y: os.path.join(osiris_root, f"Osiris_{y}") for (y, _), _ in field_map.items()}
     UNIFIED = os.path.join(osiris_root, "Osiris_unified")
     os.makedirs(UNIFIED, exist_ok=True)
 
@@ -2022,15 +2096,30 @@ def build_osiris_unified(osiris_root, field_map):
             df_norm = normalize_sonde(df, year, out_serie)
             df_norm.to_csv(os.path.join(dst_dir, out_serie + ".csv"), index=False)
 
-        # 2) Copie des enrichissements (météo, satellite)
+        # 2) Copie des enrichissements (météo, satellite) s'ils existent
         for extra in ("meteo_daily.csv", "meteo_hourly.csv", "sentinel_data.csv"):
             src_extra = os.path.join(src_dir, extra)
             if os.path.isfile(src_extra):
                 shutil.copy2(src_extra, os.path.join(dst_dir, extra))
 
         # 3) Ligne site pour sites_and_soil.csv unifié
-        sites_soil = pd.read_csv(os.path.join(SRC_YEARS[year], "sites_and_soil.csv"))
-        row = sites_soil[sites_soil["site_id"] == src_field].iloc[0].to_dict()
+        row = None
+        soil_file = os.path.join(SRC_YEARS[year], "sites_and_soil.csv")
+        if os.path.isfile(soil_file):
+            sites_soil = pd.read_csv(soil_file)
+            sub = sites_soil[sites_soil["site_id"] == src_field]
+            if len(sub):
+                row = sub.iloc[0].to_dict()
+        if row is None:
+            sites_csv = pd.read_csv(os.path.join(SRC_YEARS[year], "sites.csv"))
+            sub = sites_csv[sites_csv["site_id"] == src_field]
+            if len(sub):
+                # sites.csv seul (2026 avant get_features) : sol = NaN
+                row = {"site_id": src_field, "longitude": sub["longitude"].iloc[0],
+                       "latitude": sub["latitude"].iloc[0]}
+            else:
+                print(f"⚠ champ {src_field} introuvable dans sites*.csv de {year}")
+                continue
         row["site_id"] = dst_field
         site_rows.append(row)
 
