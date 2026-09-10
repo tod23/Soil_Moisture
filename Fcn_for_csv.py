@@ -558,7 +558,7 @@ def text_contains_any_keyword(text, keywords):
 
 
 def discover_collections(base, soil_type):
-    catalog = requests.get(base + "/catalog.json").json()
+    catalog = requests.get(base + "/catalog.json", timeout=60).json()
     links = [link for link in catalog.get("links", []) if link.get("rel") == "child"]
     soil_types = parse_soil_types(soil_type)
     filtered = []
@@ -641,7 +641,7 @@ def get_assets_before_and_after_filters(params, collections, verbose=False):
 
     for lien in collections:
         collection_href = normalize_collection_href(params["base"], lien["href"])
-        collection = requests.get(collection_href).json()
+        collection = requests.get(collection_href, timeout=60).json()
         collection_title = lien.get("title", "Sans titre")
         items = [link for link in collection.get("links", []) if link.get("rel") == "item"]
 
@@ -651,7 +651,7 @@ def get_assets_before_and_after_filters(params, collections, verbose=False):
 
         for item_lien in items:
             item_href = normalize_child_href(collection_href, item_lien["href"])
-            item_data = requests.get(item_href).json()
+            item_data = requests.get(item_href, timeout=60).json()
             item_bbox = item_data.get("bbox")
             if not intersects_bbox(item_bbox, params["box_zone"]):
                 continue
@@ -739,10 +739,20 @@ def fetch_zenodo_geotiffs(zenodo_doi, params,verbose=False):
             return zenodo_assets
         
         api_url = f"https://zenodo.org/api/records/{record_id}"
-        response = requests.get(api_url, timeout=30)
-        response.raise_for_status()
-        data = response.json()
-        
+        data = None
+        for retry in range(1, 4):
+            try:
+                response = requests.get(api_url, timeout=60)
+                response.raise_for_status()
+                data = response.json()
+                break
+            except Exception as exc:
+                if retry == 3:
+                    raise
+                if verbose:
+                    print(f"[Zenodo] Retry {retry}/3 sur {zenodo_doi}: {exc}")
+                time.sleep(2 * retry)
+
         files = data.get("files", [])
         record_title = data.get("title", "Zenodo Dataset")
         
@@ -1020,6 +1030,17 @@ def is_dem_asset(asset):
     return infer_short_type(source_text) == "dem"
 
 
+def _missing_soil_types(soil_types, point_results):
+    """Renvoie les types de sol demandés pour lesquels aucune valeur non-null
+    n'a été extraite (ex. ksat manquant suite à un échec réseau/lecture)."""
+    missing = []
+    for one_type in parse_soil_types(soil_types):
+        keys = [k for k in point_results if infer_short_type(k) == one_type]
+        if not keys or all(pd.isna(v) for v in (point_results[k] for k in keys)):
+            missing.append(one_type)
+    return missing
+
+
 def get_site_soil_properties_as_dataframe(
     site_id,
     longitude,
@@ -1028,45 +1049,76 @@ def get_site_soil_properties_as_dataframe(
     stat="m",
     resolution="30m",
     base=BASE_DEFAULT,
-    verbose=False
+    verbose=False,
+    max_attempts=5,
 ):
+    """Extrait les propriétés du sol au point (lon, lat).
+
+    Résout de façon robuste les échecs (réseau/lecture GeoTIFF) : si un type
+    demandé n'a aucune valeur, on réessaie jusqu'à `max_attempts` puis on lève
+    une erreur explicite au lieu de retourner un profil incomplet (NaN)."""
     delta = 0.001
     bbox = [longitude - delta, latitude - delta, longitude + delta, latitude + delta]
 
-    params = configure_inputs(
-        soil_type=soil_types,
-        stat=stat,
-        resolution=resolution,
-        box_zone=bbox,
-        base=base,
-        strict=False,
-    )
-
-    collections = discover_collections(params["base"], params["type"])
-    valid_assets = get_valid_assets(params, collections, verbose=False)
-    
-    for zenodo in zenodo_list:
-        valid_assets += fetch_zenodo_geotiffs(zenodo, params, verbose=False)
-
     if verbose:
         print(f"\nExtraction in-memory pour le site: {site_id} ({latitude}, {longitude})")
-        print(f"Nombre d'assets trouvés : {len(valid_assets)}")
 
-    point_results = extract_point_values(longitude, latitude, valid_assets, verbose=verbose)
-    
-    dem_assets = [a for a in valid_assets if is_dem_asset(a)]
-    if dem_assets:
-        topo_results = extract_dem_terrain_attributes_in_memory(longitude, latitude, dem_assets[0], verbose=verbose)
-        point_results.update(topo_results)
-    
-    point_results['site_id'] = site_id
-    point_results['longitude'] = longitude
-    point_results['latitude'] = latitude
-    
-    df = pd.DataFrame([point_results])
-    # Réorganiser pour avoir les identifiants en premier
-    cols = ['site_id', 'longitude', 'latitude'] + [c for c in df.columns if c not in ['site_id', 'longitude', 'latitude']]
-    return df[cols]
+    last_error = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            params = configure_inputs(
+                soil_type=soil_types,
+                stat=stat,
+                resolution=resolution,
+                box_zone=bbox,
+                base=base,
+                strict=False,
+            )
+
+            collections = discover_collections(params["base"], params["type"])
+            valid_assets = get_valid_assets(params, collections, verbose=False)
+
+            for zenodo in zenodo_list:
+                valid_assets += fetch_zenodo_geotiffs(zenodo, params, verbose=False)
+
+            if verbose:
+                print(f"  [essai {attempt}/{max_attempts}] Assets trouvés : {len(valid_assets)}")
+
+            point_results = extract_point_values(longitude, latitude, valid_assets, verbose=verbose)
+
+            dem_assets = [a for a in valid_assets if is_dem_asset(a)]
+            if dem_assets:
+                topo_results = extract_dem_terrain_attributes_in_memory(longitude, latitude, dem_assets[0], verbose=verbose)
+                point_results.update(topo_results)
+
+            missing = _missing_soil_types(soil_types, point_results)
+            if not missing:
+                point_results['site_id'] = site_id
+                point_results['longitude'] = longitude
+                point_results['latitude'] = latitude
+
+                df = pd.DataFrame([point_results])
+                cols = ['site_id', 'longitude', 'latitude'] + [c for c in df.columns if c not in ['site_id', 'longitude', 'latitude']]
+                return df[cols]
+
+            last_error = (
+                f"valeurs manquantes pour le(s) type(s) {missing} "
+                f"(clés extraites: {sorted(point_results)})"
+            )
+            print(f"  [essai {attempt}/{max_attempts}] {site_id}: {last_error}")
+
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            print(f"  [essai {attempt}/{max_attempts}] {site_id}: erreur -> {last_error}")
+
+        if attempt < max_attempts:
+            time.sleep(2 * attempt)
+
+    raise RuntimeError(
+        f"Extraction des propriétés du sol ÉCHOUÉE pour {site_id} "
+        f"({latitude}, {longitude}) après {max_attempts} essais : {last_error}. "
+        f"Profil non enregistré pour éviter des NaN silencieux."
+    )
 
 
 ########################################################################################################################
