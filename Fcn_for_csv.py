@@ -1129,7 +1129,7 @@ def get_site_soil_properties_as_dataframe(
 
 import glob
 
-def get_topo_data(BASE_DEST_DIR, master_path, coordonnees):
+def get_topo_data(BASE_DEST_DIR, master_path):
     # Recherche des fichiers CSV générés précédemment
 
     """Parcourt depth_X/station_Y/ et retourne tous les *soil_moisture*.csv"""
@@ -1156,12 +1156,8 @@ def get_topo_data(BASE_DEST_DIR, master_path, coordonnees):
                 df_test = pd.read_csv(csv_file, nrows=1) # On ne lit que la première ligne pour être plus rapide
                 
                 # Extraction des coordonnées
-                if coordonnees == "Grandvillers":
-                    lat=49.4727
-                    lon=2.6203
-                else:
-                    lat = df_test['Latitude'].iloc[0]
-                    lon = df_test['Longitude'].iloc[0]
+                lat = df_test['Latitude'].iloc[0]
+                lon = df_test['Longitude'].iloc[0]
                 
                 site_id = os.path.basename(csv_file).split('_')[0]
                 
@@ -1379,7 +1375,7 @@ def get_satellite_data_for_point(lon, lat, start_date, end_date):
     return df_sat
 
 
-def enrich_csv_with_satellites(csv_path, output_dir, coordonnees ):
+def enrich_csv_with_satellites(csv_path, output_dir):
     """
     Lit un CSV d'entraînement existant, ajoute les colonnes satellites,
     les valeurs manquantes restent à NaN, et sauvegarde le nouveau dataset.
@@ -1394,12 +1390,8 @@ def enrich_csv_with_satellites(csv_path, output_dir, coordonnees ):
     df.set_index(time_col, inplace=True)
 
     # Extraire les coordonnées et la période
-    if coordonnees == "Grandvillers":
-        lat=49.4727
-        lon=2.6203
-    else:
-        lat = df['Latitude'].iloc[0]
-        lon = df['Longitude'].iloc[0]
+    lat = df['Latitude'].iloc[0]
+    lon = df['Longitude'].iloc[0]
     # On ajoute une petite marge temporelle pour encadrer
     start_date = (df.index.min() - pd.Timedelta(days=5)).strftime('%Y-%m-%d')
     end_date = (df.index.max() + pd.Timedelta(days=5)).strftime('%Y-%m-%d')
@@ -1759,7 +1751,7 @@ def enrich_stations_with_satellites(input_dir):
         if any(c.startswith(('S2_', 'S1_', 'HLS_')) for c in df.columns):
             print(f"{os.path.basename(csv_file)} déjà enrichi, ignoré")
             continue
-        enrich_csv_with_satellites(csv_file, "", "")
+        enrich_csv_with_satellites(csv_file, "")
 
 
 def patch_missing_topo(master_path):
