@@ -18,7 +18,7 @@ for feat_cfg in FEATURE_CONFIGS:
     print(f"  Features: {feature_cols}")
 
     ############### Training ISMN (modèles de base)  ###############
-    full_training(feat_cfg, base_path, drive_dir, MONTHS)
+    full_training(feat_cfg, base_path, drive_dir, MONTHS)  # modèles de base déjà entraînés (08/09)
 
     ############### Evaluation Osiris avec les modèles ISMN ###############
     full_eval_osiris(feat_cfg, drive_dir, all_dfs)

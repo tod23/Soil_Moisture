@@ -9,8 +9,7 @@ from tensorflow.keras import callbacks
 import warnings
 
 from config import (RESULTS_CSV_PATH, MASTER_CSV_PATH, SAVE_MODELS_DIR, SAVE_RESULTS_CSV, SAVE_NETWORKS_DIR,
-                    SAVE_PLOTS, EPOCHS, BATCH_SIZE, DATE_COL,
-                    SEED)
+                    SAVE_PLOTS, EPOCHS, BATCH_SIZE, SEED)
 from preprocessing import cut_and_filter_dfs, make_supervised, fit_scalers, cut_timeseries
 from files_processing import get_file_paths, save_to_results_csv, flush_results, split_spatial_files
 from features import engineer_features, update_soil_name, resample_timeseries

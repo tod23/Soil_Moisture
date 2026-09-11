@@ -86,9 +86,9 @@ MODELS = ["lstm"]
 def _without(lst, *items):
     return [x for x in lst if x not in items]
 
-SAVE_PLOTS = False
-SAVE_NETWORKS_DIR = False
-SAVE_MODELS_DIR = False
+SAVE_PLOTS = True
+SAVE_NETWORKS_DIR = True
+SAVE_MODELS_DIR = True
 SAVE_RESULTS_CSV = True
 
 TARGET_COL = "soil_moisture"
